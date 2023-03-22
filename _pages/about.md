@@ -1,6 +1,7 @@
 ---
 layout: page
 title: About me
+permalink: /about/
 ---
 
 I am Gagan Bihari Mishra. I am a programmer.
