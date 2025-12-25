@@ -1,5 +1,5 @@
 # The URL the site will be built for
-base_url = "https://notes.minbox.in"
+base_url = "https://gagan405.github.io"
 theme = "apollo"
 
 # Whether to automatically compile all Sass files in the sass directory
