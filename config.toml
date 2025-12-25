@@ -1,5 +1,5 @@
 # The URL the site will be built for
-base_url = "https://notes.minbox.in"
+base_url = "https://gagan405.github.io"
 title = "gb mishra"
 theme = "apollo"
 generate_feeds = true
