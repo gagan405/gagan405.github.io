@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 # Allow one concurrent deployment
 concurrency:
   group: "pages"
