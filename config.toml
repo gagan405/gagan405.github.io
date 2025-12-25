@@ -1,12 +1,17 @@
 # The URL the site will be built for
 base_url = "https://gagan405.github.io"
+title = "gb mishra"
 theme = "apollo"
+generate_feeds = true
+feed_filenames = ["atom.xml", "rss.xml"]
+minify_html = true
 
 # Whether to automatically compile all Sass files in the sass directory
 compile_sass = true
 
 # Whether to build a search index to be used later on by a JavaScript library
 build_search_index = true
+taxonomies = [{ name = "tags" }]
 
 [markdown]
 # Whether to do syntax highlighting
@@ -18,6 +23,7 @@ highlight_code = true
 socials = [
     { name = "twitter", url = "https://x.com/__gbm", icon = "twitter" },
     { name = "github", url = "https://github.com/gagan405/", icon = "github" },
+    { name = "rss", url = "/atom.xml", icon = "rss" },
 ]
 
 toc = true
@@ -35,7 +41,7 @@ fediverse_creator = ""    # e.g. @user@instance
 
 menu = [
     { name = "/posts", url = "/posts", weight = 1 },
-    { name = "/tags", url = "/tags", weight = 4 },
+    { name = "/tags", url = "/tags", weight = 2 },
 ]
 
 stylesheets = [
@@ -43,8 +49,8 @@ stylesheets = [
 ]
 
 [extra.taxonomies]
-sort_by = "page_count"         # e.g. name, page_count
-reverse = true
+sort_by = "name"
+reverse = false
 
 [extra.analytics]
 enabled = false
