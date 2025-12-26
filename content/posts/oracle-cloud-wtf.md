@@ -22,7 +22,7 @@ sudo yum install java-11-openjdk -y
 
 This, while there has been no changes in security rules! And I was able to login just 5 minutes ago.
 
-Here is a screen recording of this behavior: https://youtu.be/tnDdaiCZh10
+Here is a screen recording of this behavior: [screen record](https://youtu.be/tnDdaiCZh10)
 
 No wonder nobody uses this!
 
