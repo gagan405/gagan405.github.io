@@ -1,0 +1,103 @@
+<!doctype html><html class="dark light" lang=en><head><meta charset=UTF-8><meta content="IE=edge" http-equiv=X-UA-Compatible><meta content="width=device-width,initial-scale=1.0" name=viewport><meta content=https://gagan405.github.io name=base><title>
+            
+                Optimizing GC time by reducing Humongous allocations
+            
+        </title><meta content="Optimizing GC time by reducing Humongous allocations" property=og:title><link href=https://gagan405.github.io/icon/favicon.png rel=icon type=image/png><link href=https://gagan405.github.io/fonts.css rel=stylesheet><script defer src=https://gagan405.github.io/js/codeblock.js></script><script defer src=https://gagan405.github.io/js/toc.js></script><script defer src=https://gagan405.github.io/js/note.js></script><script>MathJax = {
+                    tex: {
+                        inlineMath: [
+                            ['$', '$'],
+                            ['\\(', '\\)']
+                        ]
+                    }
+                };</script><script async id=MathJax-script src=https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js></script><link title="
+    gb mishra
+" href=https://gagan405.github.io/atom.xml rel=alternate type=application/atom+xml><link title="
+    gb mishra
+" href=https://gagan405.github.io/rss.xml rel=alternate type=application/rss+xml><link href=https://gagan405.github.io/theme/light.css rel=stylesheet><link href=https://gagan405.github.io/theme/dark.css id=darkModeStyle rel=stylesheet><script src=https://gagan405.github.io/js/themetoggle.js></script><script>setTheme(getSavedTheme());</script><link href=https://gagan405.github.io/main.css media=screen rel=stylesheet><script src="https://gagan405.github.io/search_index.en.js?h=ed7db15dd4fde6e35f9a" defer></script><script src="https://gagan405.github.io/js/searchElasticlunr.min.js?h=3626c0ef99daa745b31e" defer></script><body><div class=left-content></div><div class=content><nav><div class=left-nav><a href=https://gagan405.github.io>gb mishra</a><div class=socials><a class=social href=https://x.com/__gbm rel=me> <img alt=twitter src=https://gagan405.github.io/icons/social/twitter.svg> </a><a class=social href=https://github.com/gagan405/ rel=me> <img alt=github src=https://gagan405.github.io/icons/social/github.svg> </a><a class=social href=/atom.xml rel=me> <img alt=rss src=https://gagan405.github.io/icons/social/rss.svg> </a></div></div><div class=right-nav><a href=https://gagan405.github.io/posts style=margin-right:.5em>/posts</a><a href=https://gagan405.github.io/tags style=margin-right:.5em>/tags</a><button title="$SHORTCUT to open search" class=search-button id=search-button><img alt=Search class=search-icon src=https://gagan405.github.io/icons/search.svg></button><div class="search-modal js" aria-labelledby=modalTitle id=searchModal role=dialog><div id=modal-content><h1 class=page-header id=modalTitle>Search</h1><div id=searchBar><input aria-controls=results-container aria-expanded=false autocomplete=off id=searchInput placeholder=Search... role=combobox spellcheck=false><button title="Clear search" class=clear-button id=clear-search><svg viewbox="0 -960 960 960" xmlns=http://www.w3.org/2000/svg><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button></div><div id=results-container><div id=results-info><span id=zero_results style=display:none>No results</span><span id=one_result style=display:none>1 result</span><span id=many_results style=display:none>$NUMBER results</span></div><div id=results role=listbox></div></div></div></div><a onclick="toggleTheme(); event.preventDefault();" href=# id=dark-mode-toggle> <img alt=Light id=sun-icon src=https://gagan405.github.io/icons/sun.svg> <img alt=Dark id=moon-icon src=https://gagan405.github.io/icons/moon.svg style=filter:invert()> <img alt=Auto id=auto-icon src=https://gagan405.github.io/icons/auto.svg style=filter:invert()> </a><script>updateItemToggleTheme()</script></div></nav><div data-selector="main article p" class=visible-element-observer-root><main><article><div class=title><div class=page-header>Optimizing GC time by reducing Humongous allocations</div><div class=meta>Posted on <time>2022-03-10</time><span class=tags-label>::</span><span class=tags> <a class=post-tag href=https://gagan405.github.io/tags/java/>java</a> <a class=post-tag href=https://gagan405.github.io/tags/jdk/>jdk</a> <a class=post-tag href=https://gagan405.github.io/tags/debugging/>debugging</a> <a class=post-tag href=https://gagan405.github.io/tags/optimization/>optimization</a> <a class=post-tag href=https://gagan405.github.io/tags/gc/>gc</a> </span></div></div><section class=body><p>Recently I was debugging into latency problems in a service and figured quite a few GC related issues on the way. This is a summary of the findings.<p><strong>Background</strong><p>This was a Java 8 service running with ParallelGC, primarily consuming messages from an SQS, processing, and sending the response back to another SQS. The processing involved a bunch of serialization/deserialization along with quite a lot of network calls.<p>Upon enabling G1GC for the same service, the GC activities spiked up by at least 15% and processing latency increased proportionally. The below is a gist of finding out issues related to GC and resolving those.<p><strong>Step 1 - Enable GC logs</strong><p>Enabling GC logs provides more details on whats going on in the service.<pre style=color:#c0c5ce;background-color:#2b303b><code><span>-XX:+PrintGCDetails 
+</span><span>-XX:+PrintGCDateStamps
+</span><span>-XX:+PrintGCApplicationStoppedTime
+</span><span>-XX:+PrintGCApplicationConcurrentTime
+</span><span>-XX:+PrintTenuringDistribution
+</span><span>-XX:+PrintAdaptiveSizePolicy
+</span><span>-XX:+UseStringDeduplication
+</span><span>-XX:+PrintStringDeduplicationStatistics
+</span></code></pre><p><strong>Step 2 - Analyze the logs</strong><p>After enabling detailed GC activity logging, we could see that a lot of GC pauses were ocuring due to <code>Humongous Object</code> allocations. <a href=https://docs.oracle.com/javase/10/gctuning/garbage-first-garbage-collector.htm#JSGCT-GUID-D74F3CC7-CC9F-45B5-B03D-510AEEAC2DAC>Humongous Objects</a> mean, memory chunks of size more than 50% of the G1 block size. The G1 block size depends on the heap memory size and for us it was 4M. So, essentially, any memory allocation more than 2M was considered as <code>Humongous</code> and too many of those was creating high GC activities and pause times.<p>The logs were analyzed using <a href=https://gceasy.io/>GCEasy</a>. A really good handy tool to quickly analyze the GC logs.<p>Sample logs:<pre style=color:#c0c5ce;background-color:#2b303b><code><span>2021-11-26T09:20:57.159+0000: 87437.995: [GC pause (G1 Humongous Allocation) (young) (initial-mark)
+</span><span>2021-11-26T09:21:01.763+0000: 87442.598: [GC pause (G1 Humongous Allocation) (young)
+</span><span>2021-11-26T09:21:04.983+0000: 87445.819: [GC pause (G1 Humongous Allocation) (young)
+</span></code></pre><p><strong>Step 3 - Tracing the humongous allocations</strong><p>Now that we know that humnogous object allocations are causing so much of trouble, the next step is to identify where exactly the allocations are happening. There are a few blog posts like <a href=https://www.pingtimeout.fr/posts/2020-01-23-trace-humongous-allocations-with-bpf/>this</a> which explain a way to trace them. However I tried with <a href=https://docs.oracle.com/javacomponents/jmc-5-4/jfr-runtime-guide/about.htm>JavaFlightRecorder</a> which worked quite smooth.<p>Recording with Java Flight Recorder:<pre style=color:#c0c5ce;background-color:#2b303b><code><span>jdk1.8/bin/jcmd 2092 JFR.start settings=profile
+</span><span>2092:
+</span><span>Started recording 10. No limit specified, using maxsize=250MB as default.
+</span><span>
+</span><span>Use jcmd 2092 JFR.dump name=10 filename=FILEPATH to copy recording data to file.
+</span></code></pre><p>Once the output of JFR is available, we could analyze with <a href=https://www.oracle.com/java/technologies/jdk-mission-control.html>JDK Mission Control</a>.<p>The humongous allocations will be visible under <code>Event Browser -> Allocation Outside TLAB</code>.<p><img alt="JDK Mission Control TLAB" async src=JDKMissionControl_HumongousAllocation.png width=900px><p><strong>Step 4 - Removing humongous allocations</strong><p>As seen above, the humongous allocations were created during certain <code>serialization</code> process. On going through the code, it was seen that the code flow actually serialized a java object to bytes, compressed it to a gzip bytes, encoded within Base64 and then uploaded to S3.<p>The serialization flow does this:<ol><li>ObjectMapper writes to a byte array: This allocates the most of the memory as seen above in the JFR recording.<li>The byte array is gzipped creating another byte array, shorter in size<li>The resulting byte array is Base64 encoded which creates another byte array of a bit larger size.<li>The byte array is then converted to InputStream and is uploaded to S3.</ol><p>Sample code:<pre style=color:#c0c5ce;background-color:#2b303b><code><span>public byte[] serialize(T obj) throws IOException, ParseException {
+</span><span>    byte[] bytes = this.mapper.writeValueAsBytes(obj);
+</span><span>
+</span><span>    ByteArrayOutputStream output = new ByteArrayOutputStream(1024);
+</span><span>
+</span><span>    GZIPOutputStream gzip = new GZIPOutputStream(output) {
+</span><span>        {
+</span><span>            def.setLevel(Deflater.BEST_COMPRESSION);
+</span><span>        }
+</span><span>    };
+</span><span>    
+</span><span>    gzip.write(bytes);
+</span><span>    gzip.close();
+</span><span>
+</span><span>    return output.toByteArray();
+</span><span>
+</span><span>}
+</span><span>/* ... Else where ... */
+</span><span>
+</span><span>byte[] serialized = Base64.encodeBase64(serialize(object));
+</span><span>
+</span><span>ObjectMetadata objectMetadata = new ObjectMetadata();
+</span><span>objectMetadata.setContentLength(serializedArtifacts.length);
+</span><span>
+</span><span>PutObjectRequest putObjectRequest = new PutObjectRequest(s3Bucket,
+</span><span>    "some-s3-key",
+</span><span>    new ByteArrayInputStream(serialized),
+</span><span>    objectMetadata);
+</span><span>
+</span><span>s3Client.putObject(putObjectRequest);
+</span><span>
+</span></code></pre><p>The above flow actually created 3 new instances of <code>byte[]</code> in each execution. Could we do better? Can we remove certain byte array creations?<p>Turns out we can.<p>The new flow looks like:<ol><li>Object mapper can write to an outputStream instead of a byte array.<li>OutputStream can be wrapped inside Base64.encoder which will not require additional array creation for base64 conversion.<li>Gzip can take the “wrapped” output stream<li>ObjectMapper can directly write to the Gzipped stream. So no need to create a byte array.<li>S3 takes an InputStream. So we can directly convert the above output stream to an inputStream.</ol><p>Sample code after the changes:<p>Serialization:<pre style=color:#c0c5ce;background-color:#2b303b><code><span>public InputStream serializeToInputStream(T obj) throws IOException {
+</span><span>    ByteArrayOutputStream output = new ByteArrayOutputStream(1024);
+</span><span>
+</span><span>    OutputStream stream = java.util.Base64.getEncoder().wrap(output);
+</span><span>    GZIPOutputStream gzip = new GZIPOutputStream(stream)
+</span><span>    {
+</span><span>        {
+</span><span>            def.setLevel(Deflater.BEST_COMPRESSION);
+</span><span>        }
+</span><span>    };
+</span><span>
+</span><span>    this.mapper.writeValue(gzip, obj);
+</span><span>
+</span><span>    PipedInputStream in = new PipedInputStream();
+</span><span>    final PipedOutputStream out = new PipedOutputStream(in);
+</span><span>    new Thread(() -> {
+</span><span>        try {
+</span><span>            output.writeTo(out);
+</span><span>        } catch (IOException e) {
+</span><span>            throw new RuntimeException("Failed to convert to InputStream", e);
+</span><span>        } finally {
+</span><span>            // close the PipedOutputStream here because we're done writing data
+</span><span>            // once this thread has completed its run
+</span><span>            try {
+</span><span>                out.close();
+</span><span>            } catch (IOException e) {
+</span><span>                // ignore
+</span><span>            }
+</span><span>        }
+</span><span>    }).start();
+</span><span>    return in;
+</span><span>}
+</span></code></pre><p>And then use the above <code>InputStream</code> to upload objects to S3:<pre style=color:#c0c5ce;background-color:#2b303b><code><span>InputStream inputStream = serializer.serializeToInputStream(object);
+</span><span>
+</span><span>PutObjectRequest putObjectRequest = new PutObjectRequest(s3Bucket,
+</span><span>               "some-s3-key",
+</span><span>                inputStream,
+</span><span>                objectMetadata);
+</span><span> 
+</span><span>s3Client.putObject(putObjectRequest);
+</span></code></pre><p>With the above changes, I ran the JFR once again, and the humongous object allocations were gone! With a substantial (~15%) improvement in GC activities and reduction of FullGC times.<p><strong>Conclusion</strong><ul><li>We should avoid creation of un-necessary byte arrays if we can work with IO streams. The catch here is that, S3 upload might fail in mid-stream and that needs to be taken care of in the code.<li>We should avoid creation of intermediate strings through ObjectMapper. Not covered here in this post, but I did find quite a few instances where we were doing <code>objectMapper.writeValueAsString()</code> and then getting a byte array out of it. The intermediate strings take almost 3 times more memory than byte arrays and provides no great use.<li>JFR and JMC are great tools to get better insights into application behavior.</ul><p><strong>Additional Resources</strong><ul><li>https://www.infoq.com/articles/tuning-tips-G1-GC/<li>https://www.oracle.com/technical-resources/articles/java/g1gc.html<li>https://docs.oracle.com/javase/9/gctuning/garbage-first-garbage-collector-tuning.htm#JSGCT-GUID-43ADE54E-2054-465C-8376-81CE92B6C1A4</ul></section></article></main></div></div><div class=right-content></div>

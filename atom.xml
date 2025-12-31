@@ -1,0 +1,1035 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+    <title>gb mishra</title>
+    <link rel="self" type="application/atom+xml" href="https://gagan405.github.io/atom.xml"/>
+    <link rel="alternate" type="text/html" href="https://gagan405.github.io"/>
+    <generator uri="https://www.getzola.org/">Zola</generator>
+    <updated>2025-12-30T00:00:00+00:00</updated>
+    <id>https://gagan405.github.io/atom.xml</id>
+    <entry xml:lang="en">
+        <title>Hibernate, Flush Mode, and Broken Invoice Numbers</title>
+        <published>2025-12-30T00:00:00+00:00</published>
+        <updated>2025-12-30T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/hibernate-sequence-native-query/"/>
+        <id>https://gagan405.github.io/posts/hibernate-sequence-native-query/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/hibernate-sequence-native-query/">&lt;p&gt;(This was something I debugged a decade ago, in Seller Platform Services at Flipkart. I don’t exactly remember the
+Hibernate version or detailed configurations, like isolation levels. The below is the best I could do with my memory.)&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;the-problem&quot;&gt;The Problem&lt;&#x2F;h2&gt;
+&lt;p&gt;We discovered that invoice numbers were being generated out of sequence for shipments containing multiple orders.&lt;&#x2F;p&gt;
+&lt;p&gt;Instead of clean sequences like:&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;inv-1, inv-2, inv-3
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;we occasionally saw results such as:&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;inv-1, inv-2, inv-125574
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;This only happened for shipments with multiple orders, and the pattern was inconsistent across environments,
+sometimes all invoices were wrong, sometimes only one, and sometimes none at all.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;how-invoice-numbers-were-generated&quot;&gt;How Invoice Numbers Were Generated&lt;&#x2F;h2&gt;
+&lt;p&gt;At the time, invoice numbers were generated using a custom sequence table and MySQL’s LAST_INSERT_ID() function.&lt;&#x2F;p&gt;
+&lt;p&gt;The flow looked like this:&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;Increment the sequence:&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;pre data-lang=&quot;sql&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-sql &quot;&gt;&lt;code class=&quot;language-sql&quot; data-lang=&quot;sql&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;update&lt;&#x2F;span&gt;&lt;span&gt; invoice_sequence
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;set&lt;&#x2F;span&gt;&lt;span&gt; next_value = LAST_INSERT_ID(next_value) + &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;where&lt;&#x2F;span&gt;&lt;span&gt; id = :id;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;ol start=&quot;2&quot;&gt;
+&lt;li&gt;Fetch the generated value:&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;pre data-lang=&quot;sql&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-sql &quot;&gt;&lt;code class=&quot;language-sql&quot; data-lang=&quot;sql&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;select&lt;&#x2F;span&gt;&lt;span&gt; LAST_INSERT_ID();
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;ol start=&quot;3&quot;&gt;
+&lt;li&gt;Insert the invoice number into &lt;code&gt;InvoiceNumber&lt;&#x2F;code&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;Insert an outbound message into another table (to notify other consumers of invoice event)&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;h2 id=&quot;the-key-assumption&quot;&gt;The Key Assumption&lt;&#x2F;h2&gt;
+&lt;p&gt;This logic only works if &lt;strong&gt;steps 1 and 2 execute atomically&lt;&#x2F;strong&gt;, i.e., with no inserts happening in between. Otherwise, LAST_INSERT_ID() can change.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;what-went-wrong&quot;&gt;What Went Wrong&lt;&#x2F;h2&gt;
+&lt;h3 id=&quot;hibernate-flush-behavior&quot;&gt;Hibernate Flush Behavior&lt;&#x2F;h3&gt;
+&lt;p&gt;For shipments with multiple orders, this logic ran &lt;strong&gt;inside a loop&lt;&#x2F;strong&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;Hibernate (JPA), for performance reasons, does not immediately execute insert statements. Instead, it queues them and
+flushes later. Either:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;at transaction commit, or&lt;&#x2F;li&gt;
+&lt;li&gt;automatically before executing certain queries.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;This led to a subtle but fatal interaction.&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;why-last-insert-id-broke&quot;&gt;Why LAST_INSERT_ID() Broke&lt;&#x2F;h3&gt;
+&lt;p&gt;In MySQL:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;If an insert happens on a table with an AUTO_INCREMENT column, it overwrites LAST_INSERT_ID().&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;If the table has no auto-increment, LAST_INSERT_ID() becomes 0.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Hibernate sometimes flushed pending inserts between:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;the sequence update, and&lt;&#x2F;li&gt;
+&lt;li&gt;the &lt;code&gt;select LAST_INSERT_ID()&lt;&#x2F;code&gt; call.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;When that happened, the invoice number suddenly came from an entirely different table.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;observed-behavior-in-different-environments&quot;&gt;Observed Behavior in Different Environments&lt;&#x2F;h2&gt;
+&lt;p&gt;Because Hibernate’s default flush mode is AUTO, the timing was unpredictable.&lt;&#x2F;p&gt;
+&lt;p&gt;We observed several patterns:&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;a-local-environment&quot;&gt;a) Local Environment&lt;&#x2F;h3&gt;
+&lt;p&gt;For a shipment with 3 orders:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;The first invoice was correct&lt;&#x2F;li&gt;
+&lt;li&gt;The next two were wrong&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Hibernate flushed inserts right before the next iteration’s &lt;code&gt;select LAST_INSERT_ID()&lt;&#x2F;code&gt;, corrupting the value.&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;b-production-flush-only-at-commit&quot;&gt;b) Production – Flush Only at Commit&lt;&#x2F;h3&gt;
+&lt;p&gt;Some shipments flushed only when the transaction closed.
+No errors occurred&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;c-flush-at-the-last-order&quot;&gt;c) Flush at the Last Order&lt;&#x2F;h3&gt;
+&lt;p&gt;Hibernate flushed inserts only during the final iteration.
+Only the last invoice was corrupted: in 10 orders, only the last one was corrupt&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;d-flush-mid-loop&quot;&gt;d) Flush Mid-Loop&lt;&#x2F;h3&gt;
+&lt;p&gt;Hibernate flushed somewhere in the middle.&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;One random order was corrupted&lt;&#x2F;li&gt;
+&lt;li&gt;Example: 4 orders, 2nd one corrupted&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;There was no fixed pattern.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;why-this-happened&quot;&gt;Why This Happened&lt;&#x2F;h2&gt;
+&lt;p&gt;Hibernate always flushes before executing a &lt;strong&gt;native query&lt;&#x2F;strong&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;Since &lt;code&gt;select LAST_INSERT_ID()&lt;&#x2F;code&gt; is a native query, Hibernate triggered a flush—but only if there were pending inserts.&lt;&#x2F;p&gt;
+&lt;p&gt;This behavior is documented and consistent with Hibernate’s implementation:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;Default flush mode: AUTO&lt;&#x2F;li&gt;
+&lt;li&gt;Meaning: Hibernate may flush “sometimes”&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h2 id=&quot;impact&quot;&gt;Impact&lt;&#x2F;h2&gt;
+&lt;ul&gt;
+&lt;li&gt;Shipments with multiple orders generated invalid invoice numbers&lt;&#x2F;li&gt;
+&lt;li&gt;Invoice sequences jumped unexpectedly&lt;&#x2F;li&gt;
+&lt;li&gt;Downstream systems were affected due to incorrect invoice references&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h2 id=&quot;the-fix&quot;&gt;The Fix&lt;&#x2F;h2&gt;
+&lt;p&gt;We made two key changes:&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;1-removed-last-insert-id-entirely&quot;&gt;1. Removed LAST_INSERT_ID() Entirely&lt;&#x2F;h3&gt;
+&lt;ul&gt;
+&lt;li&gt;Replaced the update&#x2F;select logic with a &lt;code&gt;SELECT … FOR UPDATE&lt;&#x2F;code&gt; on the sequence row&lt;&#x2F;li&gt;
+&lt;li&gt;Ensured correctness without relying on session-level side effects&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h3 id=&quot;2-generate-invoice-numbers-in-one-shot&quot;&gt;2. Generate Invoice Numbers in One Shot&lt;&#x2F;h3&gt;
+&lt;p&gt;Instead of generating numbers inside a loop&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;We queried and reserved all required invoice numbers once per shipment&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;This eliminated flush-related timing issues completely.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h2 id=&quot;why-tests-didn-t-catch-it&quot;&gt;Why Tests Didn’t Catch It&lt;&#x2F;h2&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;Unit tests used mocked databases&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;Mock DBs don’t replicate:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;LAST_INSERT_ID()&lt;&#x2F;code&gt; semantics&lt;&#x2F;li&gt;
+&lt;li&gt;Hibernate flush timing&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;The issue was non-deterministic, making it nearly impossible to catch with small test runs&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;Integ tests missing multiple orders in one shipment&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h2 id=&quot;lessons-learned&quot;&gt;Lessons Learned&lt;&#x2F;h2&gt;
+&lt;ul&gt;
+&lt;li&gt;Never rely on LAST_INSERT_ID() across multiple statements unless they are truly atomic&lt;&#x2F;li&gt;
+&lt;li&gt;ORM flush behavior matters, especially with native queries&lt;&#x2F;li&gt;
+&lt;li&gt;Mocked DB tests are insufficient for sequence and concurrency bugs&lt;&#x2F;li&gt;
+&lt;li&gt;Prefer explicit locking (FOR UPDATE) or database-native sequences&lt;&#x2F;li&gt;
+&lt;li&gt;Generate identifiers outside loops whenever possible&lt;&#x2F;li&gt;
+&lt;li&gt;Run integration tests with all possible scenarios&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Oracle Cloud WTF</title>
+        <published>2025-12-26T00:00:00+00:00</published>
+        <updated>2025-12-26T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/oracle-cloud-wtf/"/>
+        <id>https://gagan405.github.io/posts/oracle-cloud-wtf/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/oracle-cloud-wtf/">&lt;h2 id=&quot;first-impressions-with-oci&quot;&gt;First impressions with OCI&lt;&#x2F;h2&gt;
+&lt;p&gt;I am surprised and utterly disappointed with how OCI cannot handle super basic stuff.
+Here is what I did:&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;Create a free tier instance&lt;&#x2F;li&gt;
+&lt;li&gt;ssh to the instance&lt;&#x2F;li&gt;
+&lt;li&gt;try installing openjdk, or just &lt;code&gt;yum update&lt;&#x2F;code&gt;&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;pre data-lang=&quot;shell&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-shell &quot;&gt;&lt;code class=&quot;language-shell&quot; data-lang=&quot;shell&quot;&gt;&lt;span&gt;sudo yum install java-11-openjdk -y
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;ol start=&quot;4&quot;&gt;
+&lt;li&gt;that hangs&lt;&#x2F;li&gt;
+&lt;li&gt;can&#x27;t ssh to the same instance anymore&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;This, while there has been no changes in security rules! And I was able to login just 5 minutes ago.&lt;&#x2F;p&gt;
+&lt;p&gt;Here is a screen recording of this behavior: &lt;a href=&quot;https:&#x2F;&#x2F;youtu.be&#x2F;tnDdaiCZh10&quot;&gt;screen record&lt;&#x2F;a&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;No wonder nobody uses this!&lt;&#x2F;p&gt;
+&lt;p&gt;Also, dear OCI, who signed off on this UI color combination and aesthetics?&lt;&#x2F;p&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Migrating a legacy service from Java 8 to Java 17</title>
+        <published>2023-03-13T00:00:00+00:00</published>
+        <updated>2023-03-13T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/jdk-migration/"/>
+        <id>https://gagan405.github.io/posts/jdk-migration/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/jdk-migration/">&lt;p&gt;I just migrated a legacy service from Java 8 to 17 and it was a smooth experience, except for a few. Here are some lessons learnt in the process.&lt;&#x2F;p&gt;
+&lt;p&gt;Before anything else, this shows the improvements in the overall GC time after JDK17 migration.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;img src=&quot;https:&#x2F;&#x2F;gagan405.github.io&#x2F;posts&#x2F;jdk-migration&#x2F;.&#x2F;jdk-gc-improvements.webp&quot; alt=&quot;gc improvements&quot; &#x2F;&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;em&gt;Impressive, isn’t it?&lt;&#x2F;em&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Java 17 has a lot of changes when compared to Java 8, of course. And the most important one seems to be the &lt;a href=&quot;https:&#x2F;&#x2F;blogs.oracle.com&#x2F;javamagazine&#x2F;post&#x2F;a-peek-into-java-17-continuing-the-drive-to-encapsulate-the-java-runtime-internals&quot;&gt;strongly encapsulated JDK internals&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;So, how does it matter to you, as a service code author, who rarely does any playing around with JDK internal APIs?&lt;&#x2F;p&gt;
+&lt;p&gt;Well, we probably don&#x27;t use them directly. But they could be used through other useful libraries that we use: such as EasyMock&#x2F;JaxB&#x2F;PowerMock etc.&lt;&#x2F;p&gt;
+&lt;p&gt;The process is quite simple though. And here I try to summarize:&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;use-top-down-migration&quot;&gt;&lt;strong&gt;Use Top-Down migration&lt;&#x2F;strong&gt;&lt;&#x2F;h2&gt;
+&lt;p&gt;Code written and compiled in JDK8&#x2F;11 will work as a dependency in a package compiled in 17. But we cannot have it the other way round.
+So, if you have some top level package&#x2F;service; start with that.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;upgrade-dependency-to-jdk-17-and-fix-broken-packages&quot;&gt;&lt;strong&gt;Upgrade dependency to JDK-17 and fix broken packages&lt;&#x2F;strong&gt;&lt;&#x2F;h2&gt;
+&lt;p&gt;Certain packages that I found breaking were:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;PowerMock&lt;&#x2F;li&gt;
+&lt;li&gt;EasyMock-4.x&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h2 id=&quot;remove-powermock&quot;&gt;&lt;strong&gt;Remove PowerMock&lt;&#x2F;strong&gt;&lt;&#x2F;h2&gt;
+&lt;p&gt;PowerMock has been used primarily to mock:&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;Static methods&lt;&#x2F;li&gt;
+&lt;li&gt;Final classes&lt;&#x2F;li&gt;
+&lt;li&gt;Mocking constructors&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;While most of it could be achieved through &lt;code&gt;Mockito-5.*&lt;&#x2F;code&gt; and &lt;code&gt;mockito-inline&lt;&#x2F;code&gt;, it is a good opportunity to re-visit the necessity of such tests.
+In general, if you need a bytecode mingling library such as PowerMock to test a static method; isn&#x27;t that a sign of poor code design?&lt;&#x2F;p&gt;
+&lt;p&gt;There are many articles on the web explaining why you shouldn&#x27;t be using PowerMock. So, read through them and convince yourself.
+Examples: &lt;a href=&quot;https:&#x2F;&#x2F;automationrhapsody.com&#x2F;powermock-examples-better-not-use&#x2F;&quot;&gt;this&lt;&#x2F;a&gt;, &lt;a href=&quot;https:&#x2F;&#x2F;medium.com&#x2F;@inderivita&#x2F;powermock-testing-tool-or-testing-obstacle-29f3303c9337&quot;&gt;this&lt;&#x2F;a&gt; and &lt;a href=&quot;https:&#x2F;&#x2F;news.ycombinator.com&#x2F;item?id=8775233&quot;&gt;this&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;So, in such cases, I would ask myself:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;Can I refactor the code structure to not have static utility classes?&lt;&#x2F;li&gt;
+&lt;li&gt;Can I &lt;em&gt;not mock&lt;&#x2F;em&gt; static methods and go ahead with testing them as part of unit tests.&lt;&#x2F;li&gt;
+&lt;li&gt;Can the &lt;code&gt;new Object(...)&lt;&#x2F;code&gt; code portions be abstracted out to dependency injection frameworks so that I dont have to test those?&lt;&#x2F;li&gt;
+&lt;li&gt;Do I really need final classes?&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Many such cases could essentially be refactored out for a better manageable code that wouldn&#x27;t really require such a library in the first place.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;em&gt;&lt;strong&gt;Stateless simple static methods&lt;&#x2F;strong&gt;&lt;&#x2F;em&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;If static util method is something similar to &lt;code&gt;StringUtils.isNotNull()&lt;&#x2F;code&gt;, then don’t mock it and let it execute the real method.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;em&gt;&lt;strong&gt;Complex static methods&lt;&#x2F;strong&gt;&lt;&#x2F;em&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;If the static util method does complex stuff within the utility method, such as n&#x2F;w calls, FileIO, or some complicated computation: explore options of refactoring. Easiest way is to just make it non-static and have it as an object injected to the consumer class.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;strong&gt;Static methods from Thread&#x2F;System classes:&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;If the static method is using System or Thread methods or &lt;a href=&quot;https:&#x2F;&#x2F;blog.frankel.ch&#x2F;on-powermock-abuse&#x2F;&quot;&gt;native methods&lt;&#x2F;a&gt;, such as &lt;code&gt;Thread.sleep()&lt;&#x2F;code&gt; , &lt;code&gt;mockito-inline&lt;&#x2F;code&gt; does not support mocking those methods and consider creating wrapper classes over such methods.&lt;&#x2F;p&gt;
+&lt;p&gt;Example:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;public class &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Delayer &lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;{
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;public void &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;delay&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;long &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;millis&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;throws &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;InterruptedException &lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;{
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Thread&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;sleep&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;(millis);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;    }
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;em&gt;&lt;strong&gt;Static methods using Date Times&lt;&#x2F;strong&gt;&lt;&#x2F;em&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;If the static methods rely on date time, consider using &lt;code&gt;mockMethods&lt;&#x2F;code&gt; in the real class and call those from the tests.
+Credit where due: &lt;a href=&quot;https:&#x2F;&#x2F;dzone.com&#x2F;articles&#x2F;mock-java-datetime-for-testing&quot;&gt;Reference on the below snippet&lt;&#x2F;a&gt;&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;private static &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Clock &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;CLOCK &lt;&#x2F;span&gt;&lt;span&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Clock&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;systemDefaultZone&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;private static final &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;TimeZone &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;REAL_TIME_ZONE &lt;&#x2F;span&gt;&lt;span&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;TimeZone&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;getDefault&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; Call this method in your test cases
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;public static&lt;&#x2F;span&gt;&lt;span&gt; void &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;useMockTime&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;LocalDateTime&lt;&#x2F;span&gt;&lt;span&gt; dateTime, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ZoneId&lt;&#x2F;span&gt;&lt;span&gt; zoneId) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Instant&lt;&#x2F;span&gt;&lt;span&gt; instant = dateTime.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;atZone&lt;&#x2F;span&gt;&lt;span&gt;(zoneId).&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;toInstant&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;CLOCK &lt;&#x2F;span&gt;&lt;span&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Clock&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;fixed&lt;&#x2F;span&gt;&lt;span&gt;(instant, zoneId);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;TimeZone&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;setDefault&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;TimeZone&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;getTimeZone&lt;&#x2F;span&gt;&lt;span&gt;(zoneId));
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; call this method to reset the clock back
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;public static&lt;&#x2F;span&gt;&lt;span&gt; void &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;useSystemDefaultZoneClock&lt;&#x2F;span&gt;&lt;span&gt;() {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;TimeZone&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;setDefault&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;REAL_TIME_ZONE&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;CLOCK &lt;&#x2F;span&gt;&lt;span&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Clock&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;systemDefaultZone&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;strong&gt;NOTE&lt;&#x2F;strong&gt; : The above also introduced me to a very cool library &lt;a href=&quot;https:&#x2F;&#x2F;www.archunit.org&#x2F;&quot;&gt;&lt;code&gt;archunit&lt;&#x2F;code&gt;&lt;&#x2F;a&gt; library. Also, I spent at least 2 hours in getting the regex working for intellij test directory:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;private static final &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Pattern &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;IDEA_TEST_PATTERN &lt;&#x2F;span&gt;&lt;span&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Pattern&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;compile&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;.*&#x2F;out&#x2F;test&#x2F;([^&#x2F;]+&#x2F;)+?[a-zA-Z]+Tests?.*&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;em&gt;CAUTION :&lt;&#x2F;em&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;In &lt;code&gt;junit4&lt;&#x2F;code&gt;  the expected exceptions are written at the top level such as this:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span&gt;@&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;Test&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;expected &lt;&#x2F;span&gt;&lt;span&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;SomeException&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;class&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;useMockTime&lt;&#x2F;span&gt;&lt;span&gt;(currentDateTime, zoneId);
+&lt;&#x2F;span&gt;&lt;span&gt;    ...
+&lt;&#x2F;span&gt;&lt;span&gt;    ...
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;useSystemDefaultZoneClock&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The above will &lt;strong&gt;NOT&lt;&#x2F;strong&gt; work as the final statement will not get executed due to the exception above. To handle these:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;Use &lt;code&gt;try...catch&lt;&#x2F;code&gt;  and then reset&lt;&#x2F;li&gt;
+&lt;li&gt;Use AssertJ library method &lt;a href=&quot;https:&#x2F;&#x2F;www.javadoc.io&#x2F;doc&#x2F;org.assertj&#x2F;assertj-core&#x2F;3.8.0&#x2F;org&#x2F;assertj&#x2F;core&#x2F;api&#x2F;Assertions.html#assertThatThrownBy-org.assertj.core.api.ThrowableAssert.ThrowingCallable-&quot;&gt;assertThatThrownBy&lt;&#x2F;a&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;OR simply use &lt;code&gt;Junit5&lt;&#x2F;code&gt;: &lt;code&gt;assertThrows(SomeException.class, () -&amp;gt; someMethodWhichThrowsException());&lt;&#x2F;code&gt;&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;&lt;em&gt;&lt;strong&gt;Mocking new instantiations&lt;&#x2F;strong&gt;&lt;&#x2F;em&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Refactor to not have such cases and use Dependency Injection.
+Take advantage of DI frameworks and try refactoring the code in a way that you wouldn’t need such cases.
+If that’s not an option, see below.&lt;&#x2F;p&gt;
+&lt;p&gt;Use Mockito &lt;a href=&quot;https:&#x2F;&#x2F;javadoc.io&#x2F;doc&#x2F;org.mockito&#x2F;mockito-core&#x2F;latest&#x2F;org&#x2F;mockito&#x2F;Mockito.html#mocked_construction&quot;&gt;&lt;code&gt;mockConstruction&lt;&#x2F;code&gt;&lt;&#x2F;a&gt;
+Note that mockConstruction doesn’t support argument captor. So, if you want to validate that a certain class was instantiated with a specific type params, you would need to pass a supplier to capture the constructor args, and then assert those. Sample as &lt;a href=&quot;https:&#x2F;&#x2F;groups.google.com&#x2F;g&#x2F;mockito&#x2F;c&#x2F;WqPlcNrvbOw&#x2F;m&#x2F;0WzhI51sAgAJ&quot;&gt;this&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;This approach looks un-maintanable, but I am not aware of any better approach yet.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;removing-easymock&quot;&gt;&lt;strong&gt;Removing EasyMock&lt;&#x2F;strong&gt;&lt;&#x2F;h2&gt;
+&lt;p&gt;EasyMock-5.x is &lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;easymock&#x2F;easymock&#x2F;pull&#x2F;300&quot;&gt;supposed to work&lt;&#x2F;a&gt; with JDK-17. But do you really need to have 2 separate mocking libraries in your dependency closure?
+Choose one and stick to it preferably. That makes the test cases consistent and uniform across the project.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;issues-with-errorprone&quot;&gt;&lt;strong&gt;Issues With ErrorProne&lt;&#x2F;strong&gt;&lt;&#x2F;h2&gt;
+&lt;p&gt;ErrorProne doesnt work well with Java17 and there are a few open issues such as https:&#x2F;&#x2F;github.com&#x2F;google&#x2F;error-prone&#x2F;issues&#x2F;1250&lt;&#x2F;p&gt;
+&lt;p&gt;This mostly comes from Lombok generated files not working well with ErrorProne. Some of them are not solved even after adding Generated annotation or using jvmargs specified in the above issue.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;checkstyle&quot;&gt;&lt;strong&gt;CheckStyle&lt;&#x2F;strong&gt;&lt;&#x2F;h2&gt;
+&lt;p&gt;The classic CheckStyle rules do not work with Java17. Some of the module hierarchy have changed. The rules need to be updated. Refer to the latest &lt;a href=&quot;https:&#x2F;&#x2F;checkstyle.sourceforge.io&#x2F;index.html&quot;&gt;checkstyle rules&lt;&#x2F;a&gt; and fix them!&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;em&gt;&lt;strong&gt;Formatting changes in git&lt;&#x2F;strong&gt;&lt;&#x2F;em&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;As part of checkstyle upgrade, if you are also reformatting your code, then you might want to ignore such commits appearing in your git blame  (IntelliJ annotations). To do that, you can use this git config changes. &lt;a href=&quot;https:&#x2F;&#x2F;tekin.co.uk&#x2F;2020&#x2F;09&#x2F;ignore-linting-and-formatting-commits-when-running-git-blame&quot;&gt;Here&lt;&#x2F;a&gt; is an article with instructions.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;runtime-tests&quot;&gt;&lt;strong&gt;Runtime tests&lt;&#x2F;strong&gt;&lt;&#x2F;h2&gt;
+&lt;p&gt;When all the tests and builds are going fine, its time to do a runtime test. There could still be errors in runtime due to who knows what library accessing internal JDK APIs!
+One such error I found was with Jaxb:&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;Caused by: java.lang.IllegalStateException: Unable to initialize jaxbContext
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Solution is simple. Just add the dependencies to &lt;a href=&quot;https:&#x2F;&#x2F;mvnrepository.com&#x2F;artifact&#x2F;javax.xml.bind&#x2F;jaxb-api&quot;&gt;Jaxb-api&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;Also, JaxB legacy properties have been deprecated long, and they need to be replaced with their upgraded counterparts. For example:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Marshaller&lt;&#x2F;span&gt;&lt;span&gt; marshaller = jaxbContext.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;createMarshaller&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;marshaller.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;setProperty&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;com.sun.xml.internal.bind.xmlDeclaration&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Boolean&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;FALSE&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;the above snippet needs to be changed to&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Marshaller&lt;&#x2F;span&gt;&lt;span&gt; marshaller = jaxbContext.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;createMarshaller&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;marshaller.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;setProperty&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Marshaller&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;JAXB_FRAGMENT&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Boolean&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;FALSE&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Similarly, many of the old JVM args are now deprecated and that would cause the service to fail to start. Those can simply be ignored by using the flag &lt;code&gt;-XX:+IgnoreUnrecognizedVMOptions&lt;&#x2F;code&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;strong&gt;Validation&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Verify how JDK17 is performing with live traffic. What should be the GC&#x2F; JVM params and so on.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;conclusion&quot;&gt;&lt;strong&gt;Conclusion&lt;&#x2F;strong&gt;&lt;&#x2F;h2&gt;
+&lt;p&gt;There you have it. Service running with Java 17! Enjoy the optimizations and new language features.
+Happy Coding!&lt;&#x2F;p&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Optimizing GC time by reducing Humongous allocations</title>
+        <published>2022-03-10T00:00:00+00:00</published>
+        <updated>2022-03-10T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/jdk-humongous-allocation/"/>
+        <id>https://gagan405.github.io/posts/jdk-humongous-allocation/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/jdk-humongous-allocation/">&lt;p&gt;Recently I was debugging into latency problems in a service and figured quite a few GC related issues on the way. This is a summary of the findings.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;strong&gt;Background&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;This was a Java 8 service running with ParallelGC, primarily consuming messages from an SQS, processing, and sending the response back to another SQS. The processing
+involved a bunch of serialization&#x2F;deserialization along with quite a lot of network calls.&lt;&#x2F;p&gt;
+&lt;p&gt;Upon enabling G1GC for the same service, the GC activities spiked up by at least 15% and processing latency increased proportionally. The below is a gist of
+finding out issues related to GC and resolving those.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;strong&gt;Step 1 - Enable GC logs&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Enabling GC logs provides more details on whats going on in the service.&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;-XX:+PrintGCDetails 
+&lt;&#x2F;span&gt;&lt;span&gt;-XX:+PrintGCDateStamps
+&lt;&#x2F;span&gt;&lt;span&gt;-XX:+PrintGCApplicationStoppedTime
+&lt;&#x2F;span&gt;&lt;span&gt;-XX:+PrintGCApplicationConcurrentTime
+&lt;&#x2F;span&gt;&lt;span&gt;-XX:+PrintTenuringDistribution
+&lt;&#x2F;span&gt;&lt;span&gt;-XX:+PrintAdaptiveSizePolicy
+&lt;&#x2F;span&gt;&lt;span&gt;-XX:+UseStringDeduplication
+&lt;&#x2F;span&gt;&lt;span&gt;-XX:+PrintStringDeduplicationStatistics
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;strong&gt;Step 2 - Analyze the logs&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;After enabling detailed GC activity logging, we could see that a lot of GC pauses were ocuring due to &lt;code&gt;Humongous Object&lt;&#x2F;code&gt; allocations. &lt;a href=&quot;https:&#x2F;&#x2F;docs.oracle.com&#x2F;javase&#x2F;10&#x2F;gctuning&#x2F;garbage-first-garbage-collector.htm#JSGCT-GUID-D74F3CC7-CC9F-45B5-B03D-510AEEAC2DAC&quot;&gt;Humongous Objects&lt;&#x2F;a&gt; mean, memory
+chunks of size more than 50% of the G1 block size. The G1 block size depends on the heap memory size and for us it was 4M. So, essentially, any memory allocation more than
+2M was considered as &lt;code&gt;Humongous&lt;&#x2F;code&gt; and too many of those was creating high GC activities and pause times.&lt;&#x2F;p&gt;
+&lt;p&gt;The logs were analyzed using &lt;a href=&quot;https:&#x2F;&#x2F;gceasy.io&#x2F;&quot;&gt;GCEasy&lt;&#x2F;a&gt;. A really good handy tool to quickly analyze the GC logs.&lt;&#x2F;p&gt;
+&lt;p&gt;Sample logs:&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;2021-11-26T09:20:57.159+0000: 87437.995: [GC pause (G1 Humongous Allocation) (young) (initial-mark)
+&lt;&#x2F;span&gt;&lt;span&gt;2021-11-26T09:21:01.763+0000: 87442.598: [GC pause (G1 Humongous Allocation) (young)
+&lt;&#x2F;span&gt;&lt;span&gt;2021-11-26T09:21:04.983+0000: 87445.819: [GC pause (G1 Humongous Allocation) (young)
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;strong&gt;Step 3 - Tracing the humongous allocations&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Now that we know that humnogous object allocations are causing so much of trouble, the next step is to identify where exactly the allocations are happening. There are a few blog posts like &lt;a href=&quot;https:&#x2F;&#x2F;www.pingtimeout.fr&#x2F;posts&#x2F;2020-01-23-trace-humongous-allocations-with-bpf&#x2F;&quot;&gt;this&lt;&#x2F;a&gt; which explain a way to trace them. However I tried with &lt;a href=&quot;https:&#x2F;&#x2F;docs.oracle.com&#x2F;javacomponents&#x2F;jmc-5-4&#x2F;jfr-runtime-guide&#x2F;about.htm&quot;&gt;JavaFlightRecorder&lt;&#x2F;a&gt; which worked quite smooth.&lt;&#x2F;p&gt;
+&lt;p&gt;Recording with Java Flight Recorder:&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;jdk1.8&#x2F;bin&#x2F;jcmd 2092 JFR.start settings=profile
+&lt;&#x2F;span&gt;&lt;span&gt;2092:
+&lt;&#x2F;span&gt;&lt;span&gt;Started recording 10. No limit specified, using maxsize=250MB as default.
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;Use jcmd 2092 JFR.dump name=10 filename=FILEPATH to copy recording data to file.
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Once the output of JFR is available, we could analyze with &lt;a href=&quot;https:&#x2F;&#x2F;www.oracle.com&#x2F;java&#x2F;technologies&#x2F;jdk-mission-control.html&quot;&gt;JDK Mission Control&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;The humongous allocations will be visible under &lt;code&gt;Event Browser -&amp;gt; Allocation Outside TLAB&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;img alt=&quot;JDK Mission Control TLAB&quot; async src=&quot;JDKMissionControl_HumongousAllocation.png&quot; width=&quot;900px&quot;&gt;&lt;&#x2F;img&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;strong&gt;Step 4 - Removing humongous allocations&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;As seen above, the humongous allocations were created during certain &lt;code&gt;serialization&lt;&#x2F;code&gt; process. On going through the code, it was seen that the code flow actually
+serialized a java object to bytes, compressed it to a gzip bytes, encoded within Base64 and then uploaded to S3.&lt;&#x2F;p&gt;
+&lt;p&gt;The serialization flow does this:&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;ObjectMapper writes to a byte array: This allocates the most of the memory as seen above in the JFR recording.&lt;&#x2F;li&gt;
+&lt;li&gt;The byte array is gzipped creating another byte array, shorter in size&lt;&#x2F;li&gt;
+&lt;li&gt;The resulting byte array is Base64 encoded which creates another byte array of a bit larger size.&lt;&#x2F;li&gt;
+&lt;li&gt;The byte array is then converted to InputStream and is uploaded to S3.&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;Sample code:&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;public byte[] serialize(T obj) throws IOException, ParseException {
+&lt;&#x2F;span&gt;&lt;span&gt;    byte[] bytes = this.mapper.writeValueAsBytes(obj);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    ByteArrayOutputStream output = new ByteArrayOutputStream(1024);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    GZIPOutputStream gzip = new GZIPOutputStream(output) {
+&lt;&#x2F;span&gt;&lt;span&gt;        {
+&lt;&#x2F;span&gt;&lt;span&gt;            def.setLevel(Deflater.BEST_COMPRESSION);
+&lt;&#x2F;span&gt;&lt;span&gt;        }
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;    
+&lt;&#x2F;span&gt;&lt;span&gt;    gzip.write(bytes);
+&lt;&#x2F;span&gt;&lt;span&gt;    gzip.close();
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    return output.toByteArray();
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;&#x2F;* ... Else where ... *&#x2F;
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;byte[] serialized = Base64.encodeBase64(serialize(object));
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;ObjectMetadata objectMetadata = new ObjectMetadata();
+&lt;&#x2F;span&gt;&lt;span&gt;objectMetadata.setContentLength(serializedArtifacts.length);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;PutObjectRequest putObjectRequest = new PutObjectRequest(s3Bucket,
+&lt;&#x2F;span&gt;&lt;span&gt;    &amp;quot;some-s3-key&amp;quot;,
+&lt;&#x2F;span&gt;&lt;span&gt;    new ByteArrayInputStream(serialized),
+&lt;&#x2F;span&gt;&lt;span&gt;    objectMetadata);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;s3Client.putObject(putObjectRequest);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The above flow actually created 3 new instances of &lt;code&gt;byte[]&lt;&#x2F;code&gt; in each execution. Could we do better? Can we remove certain byte array creations?&lt;&#x2F;p&gt;
+&lt;p&gt;Turns out we can.&lt;&#x2F;p&gt;
+&lt;p&gt;The new flow looks like:&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;Object mapper can write to an outputStream instead of a byte array.&lt;&#x2F;li&gt;
+&lt;li&gt;OutputStream can be wrapped inside Base64.encoder which will not require additional array creation for base64 conversion.&lt;&#x2F;li&gt;
+&lt;li&gt;Gzip can take the “wrapped” output stream&lt;&#x2F;li&gt;
+&lt;li&gt;ObjectMapper can directly write to the Gzipped stream. So no need to create a byte array.&lt;&#x2F;li&gt;
+&lt;li&gt;S3 takes an InputStream. So we can directly convert the above output stream to an inputStream.&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;Sample code after the changes:&lt;&#x2F;p&gt;
+&lt;p&gt;Serialization:&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;public InputStream serializeToInputStream(T obj) throws IOException {
+&lt;&#x2F;span&gt;&lt;span&gt;    ByteArrayOutputStream output = new ByteArrayOutputStream(1024);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    OutputStream stream = java.util.Base64.getEncoder().wrap(output);
+&lt;&#x2F;span&gt;&lt;span&gt;    GZIPOutputStream gzip = new GZIPOutputStream(stream)
+&lt;&#x2F;span&gt;&lt;span&gt;    {
+&lt;&#x2F;span&gt;&lt;span&gt;        {
+&lt;&#x2F;span&gt;&lt;span&gt;            def.setLevel(Deflater.BEST_COMPRESSION);
+&lt;&#x2F;span&gt;&lt;span&gt;        }
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    this.mapper.writeValue(gzip, obj);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    PipedInputStream in = new PipedInputStream();
+&lt;&#x2F;span&gt;&lt;span&gt;    final PipedOutputStream out = new PipedOutputStream(in);
+&lt;&#x2F;span&gt;&lt;span&gt;    new Thread(() -&amp;gt; {
+&lt;&#x2F;span&gt;&lt;span&gt;        try {
+&lt;&#x2F;span&gt;&lt;span&gt;            output.writeTo(out);
+&lt;&#x2F;span&gt;&lt;span&gt;        } catch (IOException e) {
+&lt;&#x2F;span&gt;&lt;span&gt;            throw new RuntimeException(&amp;quot;Failed to convert to InputStream&amp;quot;, e);
+&lt;&#x2F;span&gt;&lt;span&gt;        } finally {
+&lt;&#x2F;span&gt;&lt;span&gt;            &#x2F;&#x2F; close the PipedOutputStream here because we&amp;#39;re done writing data
+&lt;&#x2F;span&gt;&lt;span&gt;            &#x2F;&#x2F; once this thread has completed its run
+&lt;&#x2F;span&gt;&lt;span&gt;            try {
+&lt;&#x2F;span&gt;&lt;span&gt;                out.close();
+&lt;&#x2F;span&gt;&lt;span&gt;            } catch (IOException e) {
+&lt;&#x2F;span&gt;&lt;span&gt;                &#x2F;&#x2F; ignore
+&lt;&#x2F;span&gt;&lt;span&gt;            }
+&lt;&#x2F;span&gt;&lt;span&gt;        }
+&lt;&#x2F;span&gt;&lt;span&gt;    }).start();
+&lt;&#x2F;span&gt;&lt;span&gt;    return in;
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;And then use the above &lt;code&gt;InputStream&lt;&#x2F;code&gt; to upload objects to S3:&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;InputStream inputStream = serializer.serializeToInputStream(object);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;PutObjectRequest putObjectRequest = new PutObjectRequest(s3Bucket,
+&lt;&#x2F;span&gt;&lt;span&gt;               &amp;quot;some-s3-key&amp;quot;,
+&lt;&#x2F;span&gt;&lt;span&gt;                inputStream,
+&lt;&#x2F;span&gt;&lt;span&gt;                objectMetadata);
+&lt;&#x2F;span&gt;&lt;span&gt; 
+&lt;&#x2F;span&gt;&lt;span&gt;s3Client.putObject(putObjectRequest);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;With the above changes, I ran the JFR once again, and the humongous object allocations were gone! With a substantial (~15%) improvement in GC activities and reduction of FullGC times.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;strong&gt;Conclusion&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;We should avoid creation of un-necessary byte arrays if we can work with IO streams. The catch here is that, S3 upload might fail in mid-stream and that needs to be taken care of in the code.&lt;&#x2F;li&gt;
+&lt;li&gt;We should avoid creation of intermediate strings through ObjectMapper. Not covered here in this post, but I did find quite a few instances where we were doing &lt;code&gt;objectMapper.writeValueAsString()&lt;&#x2F;code&gt; and then getting a byte array out of it. The intermediate strings take almost 3 times more memory than byte arrays and provides no great use.&lt;&#x2F;li&gt;
+&lt;li&gt;JFR and JMC are great tools to get better insights into application behavior.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;&lt;strong&gt;Additional Resources&lt;&#x2F;strong&gt;&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;https:&#x2F;&#x2F;www.infoq.com&#x2F;articles&#x2F;tuning-tips-G1-GC&#x2F;&lt;&#x2F;li&gt;
+&lt;li&gt;https:&#x2F;&#x2F;www.oracle.com&#x2F;technical-resources&#x2F;articles&#x2F;java&#x2F;g1gc.html&lt;&#x2F;li&gt;
+&lt;li&gt;https:&#x2F;&#x2F;docs.oracle.com&#x2F;javase&#x2F;9&#x2F;gctuning&#x2F;garbage-first-garbage-collector-tuning.htm#JSGCT-GUID-43ADE54E-2054-465C-8376-81CE92B6C1A4&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Organize your PDFs by naming them by the content</title>
+        <published>2020-04-15T00:00:00+00:00</published>
+        <updated>2020-04-15T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/pdf-organizer/"/>
+        <id>https://gagan405.github.io/posts/pdf-organizer/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/pdf-organizer/">&lt;p&gt;I happen to download a lot of PDF files. Mostly ACM papers, ebooks, research papers etc. Sometimes they are named properly. But
+mostly, they are named by some random names with no correlation to the internal contents whatsoever. As such, this is a pain
+after a few weeks or months when you see the file, and cant remember what it was,and you have to open the file to see the contents.&lt;&#x2F;p&gt;
+&lt;p&gt;So I wrote this small tool in Java which reads the PDF metadata information, and also the first page of the PDF and extracts the
+possible name of the PDF file. It works well with most of the IEEE&#x2F;ACM papers or files which are published with proper metadata
+information, for example when you do it through LaTeX.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;gagan405&#x2F;pdf_renamer&quot;&gt;Here&lt;&#x2F;a&gt; is the code and the README on how to use it.&lt;&#x2F;p&gt;
+&lt;p&gt;And &lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;gagan405&#x2F;pdf-renamer-rs&quot;&gt;here&lt;&#x2F;a&gt; is a rust version which is more systemy and consumes less memory overall.&lt;&#x2F;p&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Hibernate sequence generation</title>
+        <published>2018-07-11T00:00:00+00:00</published>
+        <updated>2018-07-11T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/hibernate-sequence-generation/"/>
+        <id>https://gagan405.github.io/posts/hibernate-sequence-generation/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/hibernate-sequence-generation/">&lt;p&gt;Some years ago I had this weird encounter with hibernate where ids were getting mixed up among 2 different tables, due to &lt;code&gt;last insert id&lt;&#x2F;code&gt; and &lt;code&gt;lazy commit&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;That was another year, another time and another hibernate version.&lt;&#x2F;p&gt;
+&lt;p&gt;This time I got a new learning with the ID generation behavior.&lt;&#x2F;p&gt;
+&lt;p&gt;To the point :&lt;&#x2F;p&gt;
+&lt;p&gt;Make sure database sequence table has the same &lt;code&gt;increment by&lt;&#x2F;code&gt; as the &lt;code&gt;allocationSize&lt;&#x2F;code&gt; in &lt;code&gt;@SequenceGenerator&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;sql&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-sql &quot;&gt;&lt;code class=&quot;language-sql&quot; data-lang=&quot;sql&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;SELECT &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;* &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;FROM&lt;&#x2F;span&gt;&lt;span&gt; table_id_seq;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;ALTER SEQUENCE &lt;&#x2F;span&gt;&lt;span&gt;table_id_seq INCREMENT BY &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;20&lt;&#x2F;span&gt;&lt;span&gt;; &#x2F;&#x2F; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;20&lt;&#x2F;span&gt;&lt;span&gt; is the allocationSize in hibernate
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h2 id=&quot;what-happens-if-they-are-different&quot;&gt;What happens if they are different ?&lt;&#x2F;h2&gt;
+&lt;h3 id=&quot;allocationsize-10-incrementvalue-20&quot;&gt;&lt;code&gt;allocationSize&lt;&#x2F;code&gt; (10) &amp;lt; &lt;code&gt;incrementValue&lt;&#x2F;code&gt; (20)&lt;&#x2F;h3&gt;
+&lt;p&gt;Hibernate gets the next value = 100.&lt;&#x2F;p&gt;
+&lt;p&gt;Generates Ids till 110.&lt;&#x2F;p&gt;
+&lt;p&gt;Requests for nextValue. Gets 120.&lt;&#x2F;p&gt;
+&lt;p&gt;Works fine, but holes are created.&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;allocationsize-10-incrementvalue-1&quot;&gt;&lt;code&gt;allocationSize&lt;&#x2F;code&gt; (10) &amp;gt; &lt;code&gt;incrementValue&lt;&#x2F;code&gt; (1)&lt;&#x2F;h3&gt;
+&lt;p&gt;Hibernate gets the next value = 100.&lt;&#x2F;p&gt;
+&lt;p&gt;Generates Ids till 110.&lt;&#x2F;p&gt;
+&lt;p&gt;Requests for nextValue. Gets 101.&lt;&#x2F;p&gt;
+&lt;p&gt;Fails with &lt;code&gt;ValueExistException&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;why-is-it-a-big-deal-should-be-caught-during-testing&quot;&gt;Why is it a big deal? Should be caught during testing.&lt;&#x2F;h2&gt;
+&lt;p&gt;Well, what makes it a bit obscure is, when worked with previous version, some properties (I assume &lt;code&gt;hibernate.id.new_generator_mapping&lt;&#x2F;code&gt;) were set in a way that even if there was mismatch, it relied with the &lt;code&gt;increment by&lt;&#x2F;code&gt; value of database.&lt;&#x2F;p&gt;
+&lt;p&gt;With the 2.0 version of Spring Boot, it comes forward.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;what-about-identity-type-generation&quot;&gt;What about identity type generation ?&lt;&#x2F;h2&gt;
+&lt;p&gt;Identity type generation is certainly more cleaner, may be not much performant. However, it also requires changing the table definition.&lt;&#x2F;p&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Gradle release versioning</title>
+        <published>2018-07-03T00:00:00+00:00</published>
+        <updated>2018-07-03T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/gradle-auto-versioning-per-branch/"/>
+        <id>https://gagan405.github.io/posts/gradle-auto-versioning-per-branch/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/gradle-auto-versioning-per-branch/">&lt;p&gt;There is this awesome &lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;researchgate&#x2F;gradle-release&quot;&gt;release plugin&lt;&#x2F;a&gt; which takes care of the usual stuff and more, like checking uncommitted files, checking if commit is pushed or not, and adding release tag etc.&lt;&#x2F;p&gt;
+&lt;p&gt;You can also customize the release from a specific branch.&lt;&#x2F;p&gt;
+&lt;p&gt;But then, it still doesn&#x27;t support versioning per branch. In cases, where you want to have some snapshot (or any other classifier) release from feature branches, and want to keep that separate from main RELEASE versions.&lt;&#x2F;p&gt;
+&lt;p&gt;So, here is a quick and dirty knock around I did to make it work :&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;code&gt;gradle.properties&lt;&#x2F;code&gt; :&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;masterVersion=1.0
+&lt;&#x2F;span&gt;&lt;span&gt;snapshotVersion=1.10
+&lt;&#x2F;span&gt;&lt;span&gt;version=1.10.SNAPSHOT
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Here, &lt;code&gt;masterVersion&lt;&#x2F;code&gt; is used to track the release versions from master branch and &lt;code&gt;snapshotVersion&lt;&#x2F;code&gt; for any other branch.&lt;&#x2F;p&gt;
+&lt;p&gt;We need to know which branch we are in :&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span&gt;allProjects {
+&lt;&#x2F;span&gt;&lt;span&gt;  ext.branch = gitBranch()
+&lt;&#x2F;span&gt;&lt;span&gt;  project.version = getCustomVersion(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;false&lt;&#x2F;span&gt;&lt;span&gt;)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;def &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;gitBranch&lt;&#x2F;span&gt;&lt;span&gt;() {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;def&lt;&#x2F;span&gt;&lt;span&gt; branch = &amp;quot;&amp;quot;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;def&lt;&#x2F;span&gt;&lt;span&gt; proc = &amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;git rev-parse --abbrev-ref HEAD&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;.execute()
+&lt;&#x2F;span&gt;&lt;span&gt;    proc.in.eachLine { line -&amp;gt; branch = line }
+&lt;&#x2F;span&gt;&lt;span&gt;    proc.err.eachLine { line -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;println&lt;&#x2F;span&gt;&lt;span&gt; line }
+&lt;&#x2F;span&gt;&lt;span&gt;    proc.waitFor()
+&lt;&#x2F;span&gt;&lt;span&gt;    branch
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;We need to set this &lt;code&gt;project.version&lt;&#x2F;code&gt; as thats being read by the release plugin. I couldnt make it work with any random project property. So I had to explicitily write it out.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;def &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;getCustomVersion&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;boolean &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;base&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if&lt;&#x2F;span&gt;&lt;span&gt;(ext.branch == &amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;master&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;) {
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;return&lt;&#x2F;span&gt;&lt;span&gt; base ?  masterVersion
+&lt;&#x2F;span&gt;&lt;span&gt;                    : masterVersion + &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;.&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39; + &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;RELEASE&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;
+&lt;&#x2F;span&gt;&lt;span&gt;    } &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;else &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;return&lt;&#x2F;span&gt;&lt;span&gt; base ?  snapshotVersion
+&lt;&#x2F;span&gt;&lt;span&gt;                    : snapshotVersion + &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;.&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39; + &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;RELEASE&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The above will be called by&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span&gt;task updateCustomVersions {
+&lt;&#x2F;span&gt;&lt;span&gt;    doLast {
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;def&lt;&#x2F;span&gt;&lt;span&gt; ver = getCustomVersion(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;true&lt;&#x2F;span&gt;&lt;span&gt;)
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;def&lt;&#x2F;span&gt;&lt;span&gt; newVer = updateCustomVersionsHelper(ver)
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if&lt;&#x2F;span&gt;&lt;span&gt;(gitBranch() == &amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;master&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;) {
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;println&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;WRITING RELEASE VERSION TO &lt;&#x2F;span&gt;&lt;span&gt;&amp;quot; + newVer)
+&lt;&#x2F;span&gt;&lt;span&gt;            writeVersion(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;masterVersion&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;, newVer)
+&lt;&#x2F;span&gt;&lt;span&gt;        } &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;else &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;println&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;WRITING SNAPSHOT VERSION TO &lt;&#x2F;span&gt;&lt;span&gt;&amp;quot; + newVer)
+&lt;&#x2F;span&gt;&lt;span&gt;            writeVersion(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;snapshotVersion&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;, newVer)
+&lt;&#x2F;span&gt;&lt;span&gt;        }
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;And here are the additional methods needed ...&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; increment version by 1
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;String &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;updateCustomVersionsHelper&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;String &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;ver&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Map&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;String&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Closure&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt; patterns = [
+&lt;&#x2F;span&gt;&lt;span&gt;            &#x2F;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;(\d+)([^\d]*$)&lt;&#x2F;span&gt;&lt;span&gt;&#x2F;: { &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Matcher&lt;&#x2F;span&gt;&lt;span&gt; m, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Project&lt;&#x2F;span&gt;&lt;span&gt; p -&amp;gt; m.replaceAll(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ab7967;&quot;&gt;${&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;(m[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;][&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;] &lt;&#x2F;span&gt;&lt;span&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;int&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;) &lt;&#x2F;span&gt;&lt;span&gt;+ &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ab7967;&quot;&gt;}${&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;m[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;][&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ab7967;&quot;&gt;}&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;) }
+&lt;&#x2F;span&gt;&lt;span&gt;    ]
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;for&lt;&#x2F;span&gt;&lt;span&gt; (entry in patterns) {
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;String&lt;&#x2F;span&gt;&lt;span&gt; pattern = entry.key
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Closure&lt;&#x2F;span&gt;&lt;span&gt; handler = entry.value
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Matcher&lt;&#x2F;span&gt;&lt;span&gt; matcher = ver =~ pattern
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if&lt;&#x2F;span&gt;&lt;span&gt; (matcher.find()) {
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;return &lt;&#x2F;span&gt;&lt;span&gt;handler(matcher, project)
+&lt;&#x2F;span&gt;&lt;span&gt;        }
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; writes version to gradle.properties file
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;protected void &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;writeVersion&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;String &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;key&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;version&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;try &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;def&lt;&#x2F;span&gt;&lt;span&gt; file = project.file(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;gradle.properties&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;)
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if&lt;&#x2F;span&gt;&lt;span&gt; (!file.file) {
+&lt;&#x2F;span&gt;&lt;span&gt;            project.ant.echo(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;file&lt;&#x2F;span&gt;&lt;span&gt;: file, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;message&lt;&#x2F;span&gt;&lt;span&gt;: &amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;$key&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;=&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;$version&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;)
+&lt;&#x2F;span&gt;&lt;span&gt;        } &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;else &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;def&lt;&#x2F;span&gt;&lt;span&gt; fileText = file.text
+&lt;&#x2F;span&gt;&lt;span&gt;            fileText = fileText.replaceAll(key + &amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;.*&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;String&lt;&#x2F;span&gt;&lt;span&gt;.format(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;%s=%s&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;, key, version))
+&lt;&#x2F;span&gt;&lt;span&gt;            file.write(fileText)
+&lt;&#x2F;span&gt;&lt;span&gt;        }
+&lt;&#x2F;span&gt;&lt;span&gt;    } &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;catch&lt;&#x2F;span&gt;&lt;span&gt; (&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Exception&lt;&#x2F;span&gt;&lt;span&gt; be) {
+&lt;&#x2F;span&gt;&lt;span&gt;        be.printStackTrace()
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;throw new GradleException&lt;&#x2F;span&gt;&lt;span&gt;(&amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;Unable to write version property.&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;, be)
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Finally, call the &lt;code&gt;updateVersion&lt;&#x2F;code&gt; task when release is executed :&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span&gt;commitNewVersion.dependsOn updateCustomVersions
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Use automatic versioning and see it running :&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;.&#x2F;gradlew release -Prelease.useAutomaticVersion=true
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Gradle, the pain in ass</title>
+        <published>2018-07-01T00:00:00+00:00</published>
+        <updated>2018-07-01T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/early-experiences-with-gradle/"/>
+        <id>https://gagan405.github.io/posts/early-experiences-with-gradle/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/early-experiences-with-gradle/">&lt;p&gt;Few days ago I had read someone&#x27;s blog on how they went with the flow and tried gradle and eventually ended up in a mess and went back to good ol&#x27; maven.&lt;&#x2F;p&gt;
+&lt;p&gt;I wasn&#x27;t really sure then. And I am not really that sure right now either, as my situation is probably different for one reason, and second, I immensely dislike XML files.&lt;&#x2F;p&gt;
+&lt;p&gt;Nevertheless, I get what he was saying. Gradle is no smooth sailing. Quite frequently I find myself struggling with making things work. Plugins, versions, sourcesets...&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;versions-and-plugins&quot;&gt;Versions and Plugins&lt;&#x2F;h2&gt;
+&lt;p&gt;Gradle is going the python way. Python 2.6, 2.7, 3.4 ... and nothing compatible with another. One library in one version, wont work the same in another version. Gradle is also in a similar landscape with all the damn plugins.&lt;&#x2F;p&gt;
+&lt;p&gt;Gradle as a build tool, does come with certain sets of plugins. But eventually you will end up depending on a bunch of other 3rd party plugins for your needs. For e.g., &lt;code&gt;spring-boot&lt;&#x2F;code&gt;. Now, with every new version of Gradle, the dependent plugins are not guranteed to behave the same as before. Moreover, its not even sure if they will even work at all.&lt;&#x2F;p&gt;
+&lt;p&gt;So, you are stuck with the old version plugins, and keep hoping to get a newer version released soon so that you can finally close that tech debt item you always wanted to finish.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;multi-projects&quot;&gt;Multi projects&lt;&#x2F;h2&gt;
+&lt;p&gt;I was a fan of multi module or multi projects. Not anymore!&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;Many of the plugins do not work seamlessly with multi-project settings. Take for example the &lt;code&gt;release plugin&lt;&#x2F;code&gt;. Or the &lt;code&gt;Jacoco&lt;&#x2F;code&gt; plugin.&lt;&#x2F;li&gt;
+&lt;li&gt;Dependency management among all the sub projects is a pain.&lt;&#x2F;li&gt;
+&lt;li&gt;Integration tests do not work properly when modules depend on each other. I actually had to write sources in one module, unit tests in the same module and integ tests in another module.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h2 id=&quot;memory-and-cpu-footprint&quot;&gt;Memory and CPU footprint&lt;&#x2F;h2&gt;
+&lt;p&gt;I dont know how gradle works under the hood. But whenever I run it, it almost kills my machine. I can make an omlete with that much heat. I was hoping in later versions, with all that daemmon, parallelization, it would get better. But even with version 4.8, it sucks amazingly.&lt;&#x2F;p&gt;
+&lt;p&gt;Well, I am not going away from Gradle anytime soon. But I wish it stabilizes a bit more.&lt;&#x2F;p&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>SpringBoot — Exceptions to Responses</title>
+        <published>2017-04-16T00:00:00+00:00</published>
+        <updated>2017-04-16T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/spring-boot-zalando-problems/"/>
+        <id>https://gagan405.github.io/posts/spring-boot-zalando-problems/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/spring-boot-zalando-problems/">&lt;p&gt;As applications grow, number of APIs increase, number of consumers increase, it is extremely critical to have a uniform response structure across all APIs. Different APIs behaving differently, conflicting error codes or a &lt;code&gt;HttpStatus&lt;&#x2F;code&gt; of 500 for something like a invalid credit card number or email in the request payload is highly undesirable.&lt;&#x2F;p&gt;
+&lt;p&gt;The standard way of responding error&#x2F;exceptional situations is well documented in Spring. This roughly can be done like :&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;In your resource method, return a &lt;code&gt;ResponseEntity&lt;&#x2F;code&gt;, with the desired Object body.
+This will look something like this :&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;return &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ResponseEntity&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;status&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;401&lt;&#x2F;span&gt;&lt;span&gt;).&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;body&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;\&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;message&lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;\&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt; : &lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;\&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;Invalid password&lt;&#x2F;span&gt;&lt;span style=&quot;color:#96b5b4;&quot;&gt;\&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;}&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;ul&gt;
+&lt;li&gt;Or the other way could be, and more preferable way, is to throw Exceptions and write Exception mappers which then convert the exceptions to appropriate response objects. Google for it and numerous examples are available on this.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Quite some time ago, I found this &lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;zalando&#x2F;problem&quot;&gt;Zalando Problems&lt;&#x2F;a&gt; library, that takes the second approach, and generates nice reponse structures for various exception types, and is easy integrated with &lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;zalando&#x2F;problem-spring-web&quot;&gt;Spring Boot&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;Their package, by default handles quite a number of exception types. But, as the need to have custom exception types come, we have to provide &lt;code&gt;AdviceTrait&lt;&#x2F;code&gt;s for the new exception types. Which is done like something as below :&lt;&#x2F;p&gt;
+&lt;p&gt;A custom exception class :&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;public class &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;InvalidEmailException &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;extends &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;RuntimeException &lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;{
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;public &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;InvalidEmailException&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;String &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;msg&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;){
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;super&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;(msg);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;  }
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;An advice trait that converts it to a response object:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;public interface &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;InvalidEmailAdviceTrait &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;extends &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;AdviceTrait &lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;{
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;    @&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;ExceptionHandler
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;default &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ResponseEntity&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Problem&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#8fa1b3;&quot;&gt;handleInvalidEmail&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;(
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;final &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;InvalidEmailException &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;exception&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;,
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;final &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;NativeWebRequest &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;request&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;) {
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;return &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;create&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Status&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;BAD_REQUEST&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;, exception, request);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;    }
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Now we plug this in along with the other traits:
+(&lt;code&gt;ProblemHandling&lt;&#x2F;code&gt; is the packaged interface from zalando library.)&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;public interface &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;CustomProblemHandling &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;extends &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;ProblemHandling&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;InvalidEmailAdviceTrait&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;{
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;We need to provide this as a &lt;code&gt;ControllerAdvice&lt;&#x2F;code&gt; so that spring makes use of it.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span&gt;@&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;ControllerAdvice
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;public class &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;CustomExceptionHandler &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;implements &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;CustomProblemHandling&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;{
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#eff1f5;&quot;&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;And thats it! You raise a &lt;code&gt;InvalidEmailException&lt;&#x2F;code&gt; and the appropriate response is returned.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;throw new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;InvalidEmailException&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;Invalid email format.&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Response :&lt;&#x2F;p&gt;
+&lt;pre style=&quot;background-color:#2b303b;color:#c0c5ce;&quot;&gt;&lt;code&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;	&amp;quot;title&amp;quot;: &amp;quot;Bad Request&amp;quot;,
+&lt;&#x2F;span&gt;&lt;span&gt;	&amp;quot;status&amp;quot;: 400,
+&lt;&#x2F;span&gt;&lt;span&gt;	&amp;quot;detail&amp;quot;: &amp;quot;Invalid email format..&amp;quot;
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;To be noted that the response will have a &lt;code&gt;Content-Type&lt;&#x2F;code&gt; of &lt;a href=&quot;https:&#x2F;&#x2F;tools.ietf.org&#x2F;html&#x2F;rfc7807&quot;&gt;&lt;code&gt;application&#x2F;problem+json&lt;&#x2F;code&gt;&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Multi-module Gradle to Debian</title>
+        <published>2017-04-10T00:00:00+00:00</published>
+        <updated>2017-04-10T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/dropwizard-debian/"/>
+        <id>https://gagan405.github.io/posts/dropwizard-debian/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/dropwizard-debian/">&lt;p&gt;There is already a &lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;gesellix&#x2F;gradle-debian-plugin&quot;&gt;gradle plugin&lt;&#x2F;a&gt; which creates a debian out of a gradle project.&lt;&#x2F;p&gt;
+&lt;p&gt;However, as far as I remember, that did had certain problems with the newer version of Gradle (2.2+) and in multi-module projects. (Unfortunately, it is too late to remember what exactly was the problem).&lt;&#x2F;p&gt;
+&lt;p&gt;Anyhow, I wrote some custom gradle tasks, that just creates a debian package. Of course, the debian control files, and file heirarchies are project specific and needs to be changed as per requirements.&lt;&#x2F;p&gt;
+&lt;p&gt;As mentioned, I added a couple of tasks, starting with the one &lt;code&gt;allJar&lt;&#x2F;code&gt; which creates a fat jar with all the complied class files :&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span&gt;task allJar(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;type&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Jar&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;dependsOn&lt;&#x2F;span&gt;&lt;span&gt;: [subprojects.tasks[&amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;classes&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;], subprojects.sourcesJar, subprojects.jar, subprojects.copyToLib ] ) {
+&lt;&#x2F;span&gt;&lt;span&gt;    baseName = project.name + &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;-all&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;
+&lt;&#x2F;span&gt;&lt;span&gt;    subprojects.each { subproject -&amp;gt;
+&lt;&#x2F;span&gt;&lt;span&gt;        from subproject.configurations.archives.allArtifacts.files.collect {
+&lt;&#x2F;span&gt;&lt;span&gt;            zipTree(it)
+&lt;&#x2F;span&gt;&lt;span&gt;        }
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;    manifest {
+&lt;&#x2F;span&gt;&lt;span&gt;        attributes &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;Main-Class&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;: mainClassName
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The task &lt;code&gt;copyToLib&lt;&#x2F;code&gt; is used here to include any external jar files located in &lt;code&gt;lib&lt;&#x2F;code&gt; directories.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span&gt;subprojects {
+&lt;&#x2F;span&gt;&lt;span&gt;    task copyToLib( &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;type&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Copy&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;        into &amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;$buildDir&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;&#x2F;libs&#x2F;lib&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;
+&lt;&#x2F;span&gt;&lt;span&gt;        from configurations.runtime
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;After this, we can just add all the required tasks in one single file, for e.g., &lt;code&gt;debian.gradle&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;task copyJarDeps(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;type&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Copy&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    from(subprojects.configurations.runtime)
+&lt;&#x2F;span&gt;&lt;span&gt;    into project.file(&amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;debian&#x2F;package&#x2F;usr&#x2F;share&#x2F;test-project&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;task copyControlFiles(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;type&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Copy&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    from &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;.&#x2F;DEBIAN_CONTROL&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;
+&lt;&#x2F;span&gt;&lt;span&gt;    into project.file(&amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;debian&#x2F;package&#x2F;DEBIAN&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;task copyAppConfigFiles(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;type&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Copy&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    from &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;rootProject&#x2F;config&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;
+&lt;&#x2F;span&gt;&lt;span&gt;    into project.file(&amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;debian&#x2F;package&#x2F;etc&#x2F;configName&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;task copySwaggerFiles(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;type&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Copy&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;    from &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;swagger&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;
+&lt;&#x2F;span&gt;&lt;span&gt;    into project.file(&amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;debian&#x2F;package&#x2F;usr&#x2F;share&#x2F;assets&#x2F;swagger&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;task copyDebRunScripts(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;type&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Copy&lt;&#x2F;span&gt;&lt;span&gt;){
+&lt;&#x2F;span&gt;&lt;span&gt;    from &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;.&#x2F;startup_script&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;
+&lt;&#x2F;span&gt;&lt;span&gt;    into project.file(&amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;debian&#x2F;package&#x2F;etc&#x2F;init.d&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;task copyMainClassJar(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;type&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;Copy&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;dependsOn&lt;&#x2F;span&gt;&lt;span&gt;: allJar){
+&lt;&#x2F;span&gt;&lt;span&gt;    from &amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;build&#x2F;libs&#x2F;root-project-all-0.1.0.jar&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;
+&lt;&#x2F;span&gt;&lt;span&gt;    into project.file(&amp;#39;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;debian&#x2F;package&#x2F;usr&#x2F;share&#x2F;projectName&lt;&#x2F;span&gt;&lt;span&gt;&amp;#39;)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;task copyDebFiles(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;dependsOn&lt;&#x2F;span&gt;&lt;span&gt;: [copyJarDeps, copyAppConfigFiles, copyDebRunScripts, copyControlFiles, copySwaggerFiles])
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;task buildDeb(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;dependsOn&lt;&#x2F;span&gt;&lt;span&gt;: [allJar, copyDebFiles, copyMainClassJar]) {
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Of course, the string constants are to be replaced as per requirements of the project. And so is the debian control files in the directory &lt;code&gt;DEBIAN_CONTROL&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;Now, we just include this file in the main &lt;code&gt;build.gradle&lt;&#x2F;code&gt; file :&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span&gt;apply &lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;from&lt;&#x2F;span&gt;&lt;span&gt;: file(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;gradle&#x2F;debian.gradle&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;)
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Now, we can build a debian package by using the command :&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;groovy&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-groovy &quot;&gt;&lt;code class=&quot;language-groovy&quot; data-lang=&quot;groovy&quot;&gt;&lt;span&gt;.&#x2F;gradlew clean buildDeb
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Swagger &amp; Dropwizard</title>
+        <published>2017-04-10T00:00:00+00:00</published>
+        <updated>2017-04-10T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/dropwizard-swagger/"/>
+        <id>https://gagan405.github.io/posts/dropwizard-swagger/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/dropwizard-swagger/">&lt;p&gt;Quite a sad story that &lt;code&gt;swagger (1.5.x)&lt;&#x2F;code&gt; does not go so smooth with &lt;code&gt;Dropwizard (0.9)&lt;&#x2F;code&gt;, particularly when you have joda &lt;code&gt;LocalDateTime&lt;&#x2F;code&gt; objects, authenticated APIs, and probably &lt;code&gt;snake_case&lt;&#x2F;code&gt; dto objects.&lt;&#x2F;p&gt;
+&lt;p&gt;I spent quite sometime around it to make it work. Here is a summary for later reference:&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;joda-localdatetime&quot;&gt;Joda LocalDateTime&lt;&#x2F;h2&gt;
+&lt;p&gt;Joda &lt;code&gt;LocalDateTime&lt;&#x2F;code&gt; objects are not serialized to human readable ISO date time formats, and rather they appear as a bunch of objects. This could be overcome in version 1.3 by adding a custom &lt;code&gt;ModelConverter&lt;&#x2F;code&gt; in swagger. Unfortunately that was deprecated in version 1.5.&lt;&#x2F;p&gt;
+&lt;p&gt;To get this to work, I had to get the Swagger object and iterate through all definitions, and replace the &lt;code&gt;LocalDateTime&lt;&#x2F;code&gt; type with proper strong format.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Map&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;String&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Model&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt; definitions = swagger.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;getDefinitions&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;for&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Map&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Entry&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;String&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Model&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt; e : definitions.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;entrySet&lt;&#x2F;span&gt;&lt;span&gt;()){
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Map&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;String&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Property&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt; propertyMap = e.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;getValue&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;getProperties&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;for&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;String&lt;&#x2F;span&gt;&lt;span&gt; key : propertyMap.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;keySet&lt;&#x2F;span&gt;&lt;span&gt;()){
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Property&lt;&#x2F;span&gt;&lt;span&gt; value = propertyMap.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;get&lt;&#x2F;span&gt;&lt;span&gt;(key);
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;if&lt;&#x2F;span&gt;&lt;span&gt;(value.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;getType&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;equals&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;ref&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;) &amp;amp;&amp;amp; ((&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;RefProperty&lt;&#x2F;span&gt;&lt;span&gt;) value).&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;getSimpleRef&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;equals&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;LocalDateTime&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;)){
+&lt;&#x2F;span&gt;&lt;span&gt;        propertyMap.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;put&lt;&#x2F;span&gt;&lt;span&gt;(key, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;StringProperty&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;LocalDateTime in ISO format&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;)
+&lt;&#x2F;span&gt;&lt;span&gt;                .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;example&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;dd-mm-yyyy&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;)
+&lt;&#x2F;span&gt;&lt;span&gt;                .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;pattern&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;pattern&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;)
+&lt;&#x2F;span&gt;&lt;span&gt;                .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;description&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;ISO format string&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;));
+&lt;&#x2F;span&gt;&lt;span&gt;      }
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;  }
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h2 id=&quot;snake-case&quot;&gt;Snake Case&lt;&#x2F;h2&gt;
+&lt;p&gt;Swagger also failed to generate proper example request&#x2F;response objects if &lt;code&gt;@JsonSnakeCase&lt;&#x2F;code&gt; was mentioned. Basically, it just ignored it. Turned out, Swagger was using its own instance of &lt;code&gt;ObjectMapper&lt;&#x2F;code&gt;. To get this to work, I did an override of the default &lt;code&gt;ObjectMapper&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ObjectMapper&lt;&#x2F;span&gt;&lt;span&gt; converter = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ObjectMapper&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;converter.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;setPropertyNamingStrategy&lt;&#x2F;span&gt;&lt;span&gt;(
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;PropertyNamingStrategy&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;CAMEL_CASE_TO_LOWER_CASE_WITH_UNDERSCORES&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ModelConverters&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;getInstance&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;addConverter&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ModelResolver&lt;&#x2F;span&gt;&lt;span&gt;(converter));
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;However, the same object mapper could not be used to generate the &lt;code&gt;swagger.json&lt;&#x2F;code&gt; definition file. For the simple reason that we do not want to deserialize the Swagger object in our own way and rather let Swagger do it. So, we use a normal &lt;code&gt;ObjectMapper&lt;&#x2F;code&gt; to do it.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ObjectMapper&lt;&#x2F;span&gt;&lt;span&gt; mapper = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ObjectMapper&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;mapper.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;setSerializationInclusion&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;JsonInclude&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Include&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;NON_NULL&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;String&lt;&#x2F;span&gt;&lt;span&gt; swaggerJson = mapper.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;writeValueAsString&lt;&#x2F;span&gt;&lt;span&gt;(swagger);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;try &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#65737e;&quot;&gt;&#x2F;&#x2F; Convert object to JSON string and save into a file directly
+&lt;&#x2F;span&gt;&lt;span&gt;  mapper.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;writerWithDefaultPrettyPrinter&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;writeValue&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;File&lt;&#x2F;span&gt;&lt;span&gt;(filePath), swagger);
+&lt;&#x2F;span&gt;&lt;span&gt;} &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;catch &lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;JsonGenerationException &lt;&#x2F;span&gt;&lt;span&gt;| &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;JsonMappingException &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;e&lt;&#x2F;span&gt;&lt;span&gt;) {
+&lt;&#x2F;span&gt;&lt;span&gt;  e.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;printStackTrace&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;return &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Response&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;ok&lt;&#x2F;span&gt;&lt;span&gt;(swaggerJson).&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;build&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h2 id=&quot;authorization-header&quot;&gt;Authorization Header&lt;&#x2F;h2&gt;
+&lt;p&gt;In the generated json definition, I needed &lt;code&gt;Authorization&lt;&#x2F;code&gt; headers to be sent. Somehow, I couldn&#x27;t figure out a way to do it with Dropwizard, and I ended up modifying the generated Swagger object to add the Authorization requirement.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;java&quot; style=&quot;background-color:#2b303b;color:#c0c5ce;&quot; class=&quot;language-java &quot;&gt;&lt;code class=&quot;language-java&quot; data-lang=&quot;java&quot;&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Swagger&lt;&#x2F;span&gt;&lt;span&gt; swagger = (&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Swagger&lt;&#x2F;span&gt;&lt;span&gt;) response.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;getEntity&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;overrideDateTimeDefinitions&lt;&#x2F;span&gt;&lt;span&gt;(swagger);
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ApiKeyAuthDefinition&lt;&#x2F;span&gt;&lt;span&gt; apiKeyAuthDefinition = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ApiKeyAuthDefinition&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;authorization&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;In&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#d08770;&quot;&gt;HEADER&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Map&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;String&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;SecuritySchemeDefinition&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt; map = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;HashMap&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&amp;gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;      map.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;put&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;api_key&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;, apiKeyAuthDefinition);
+&lt;&#x2F;span&gt;&lt;span&gt;      swagger.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;setSecurityDefinitions&lt;&#x2F;span&gt;&lt;span&gt;(map);
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;SecurityRequirement&lt;&#x2F;span&gt;&lt;span&gt; requirement = &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;SecurityRequirement&lt;&#x2F;span&gt;&lt;span&gt;();
+&lt;&#x2F;span&gt;&lt;span&gt;      requirement.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;requirement&lt;&#x2F;span&gt;&lt;span&gt;(&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#a3be8c;&quot;&gt;api_key&lt;&#x2F;span&gt;&lt;span&gt;&amp;quot;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#b48ead;&quot;&gt;new &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;ArrayList&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&amp;gt;());
+&lt;&#x2F;span&gt;&lt;span&gt;      swagger.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;setSecurity&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;Lists&lt;&#x2F;span&gt;&lt;span&gt;.&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ebcb8b;&quot;&gt;SecurityRequirement&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#bf616a;&quot;&gt;newArrayList&lt;&#x2F;span&gt;&lt;span&gt;(requirement)); 
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;After all these changes, it generated the swagger definition json file correctly. I added all these changes to a resource class which extended the default &lt;code&gt;ApiListingResource&lt;&#x2F;code&gt;. The code can be found &lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;gagan405&#x2F;swagger_dropwizard_resource&#x2F;blob&#x2F;master&#x2F;SwaggerHelperResource.java&quot;&gt;here&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;misc&quot;&gt;Misc&lt;&#x2F;h3&gt;
+&lt;p&gt;I also added two of those findings as answers on StackOverflow.&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&quot;http:&#x2F;&#x2F;stackoverflow.com&#x2F;questions&#x2F;40819084&quot;&gt;http:&#x2F;&#x2F;stackoverflow.com&#x2F;questions&#x2F;40819084&lt;&#x2F;a&gt;&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;a href=&quot;http:&#x2F;&#x2F;stackoverflow.com&#x2F;questions&#x2F;40804899&quot;&gt;http:&#x2F;&#x2F;stackoverflow.com&#x2F;questions&#x2F;40804899&lt;&#x2F;a&gt;&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>Langford Pairs</title>
+        <published>2017-01-10T00:00:00+00:00</published>
+        <updated>2017-01-10T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/langford-pairs/"/>
+        <id>https://gagan405.github.io/posts/langford-pairs/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/langford-pairs/">&lt;p&gt;Recently I was asked to write some code to generate a &lt;a href=&quot;https:&#x2F;&#x2F;en.wikipedia.org&#x2F;wiki&#x2F;Langford_pairing&quot;&gt;Langford Pair&lt;&#x2F;a&gt;. I had never heard of those before.&lt;&#x2F;p&gt;
+&lt;p&gt;A langford sequence is a sequence of numbers where every number appears twice and equal numbers have a difference of their positions equal to their value.&lt;&#x2F;p&gt;
+&lt;p&gt;For example for n = 4 :       &lt;code&gt;4 1 3 1 2 4 3 2&lt;&#x2F;code&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Clearly, the sequence is of length 2n as every number appears twice.&lt;&#x2F;p&gt;
+&lt;p&gt;Intuitively we fix the highest number at the first position and at the next allowed position :   &lt;code&gt;4 _ _ _ _ 4 _ _&lt;&#x2F;code&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Then we go to the next number, that is 3 and try to place it at the next possible position :   &lt;code&gt;4 _ 3 _ _ 4 3 _&lt;&#x2F;code&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Now we try to place 2 : &lt;code&gt;4 2 3 _ 2 4 3 _&lt;&#x2F;code&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Oops. There is no valid position left for 1 now. So we backtrack, and remove the last number inserted and re-insert that somewhere else. If no re-insertable position found for that number, we backtrack again to the next upper level and try re-position that number and so on.&lt;&#x2F;p&gt;
+&lt;p&gt;So we backtrack, and remove 2 from its inserted position and check if we have any available position for 2. Turns out we have : &lt;code&gt;4 _ 3 _ 2 4 3 2&lt;&#x2F;code&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Now, we found one available position for the 1s in the sequence, and we get the final Langford sequence after placing the 1s there :  &lt;code&gt;4 1 3 1 2 4 3 2&lt;&#x2F;code&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;Interesting to see that there are multiple Langford sequences for the same value of n. For example, if we reverse the previous Langford sequence, it will still be a Langford sequence. So for n = 4, we have 2 such sequences available.&lt;&#x2F;p&gt;
+&lt;p&gt;So, how do we generate such a sequence ?&lt;&#x2F;p&gt;
+&lt;p&gt;As I wrote above, it can be easily done using recursion. Define a function that takes an array, and the next number to insert. Now, if it finds a place to insert the number, it inserts them, and recursively calls itself to insert n-1 . If it can’t insert the number it returns, and the calling function will then try re-positioning n  and do the recursion again.&lt;&#x2F;p&gt;
+&lt;p&gt;Turns out it is an expensive process, as we cannot use tail-recursion here. (For that matter in any backtracking algorithm).&lt;&#x2F;p&gt;
+&lt;p&gt;But, will we always get a Langford sequence for any given number ? Here is a mathematical proof that it can only be feasible when  &lt;code&gt;n MOD 4 = 0&lt;&#x2F;code&gt; or &lt;code&gt;n MOD 4 = −1&lt;&#x2F;code&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;That saves us from doing useless recursions and overflowing the stack when we already know no such sequence exists.&lt;&#x2F;p&gt;
+&lt;p&gt;We can also do it iteratively without recursion. But then, since we need to backtrack when no position is available for a number, we have to keep track of the numbers inserted using a stack.&lt;&#x2F;p&gt;
+&lt;p&gt;The iteration can also be done in 2 different ways. Either we iterate on the positions, and see what number can be inserted at this position, or we iterate over the numbers, where we answer ‘at what position this number can be inserted’ in every loop. Both will result in different sequences.&lt;&#x2F;p&gt;
+&lt;p&gt;We can generate all Langford Sequences by back tracking and re-positioning the numbers to the next available position.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;gagan405&#x2F;Algorithms&#x2F;blob&#x2F;master&#x2F;algorithms&#x2F;src&#x2F;in&#x2F;cafeaffe&#x2F;algo&#x2F;LangfordPairs.java&quot;&gt;Here&lt;&#x2F;a&gt; is the code that I wrote in some of my spare time, which implements all these 3 approaches.&lt;&#x2F;p&gt;
+&lt;p&gt;References :&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;http:&#x2F;&#x2F;datagenetics.com&#x2F;blog&#x2F;october32014&#x2F;index.html&lt;&#x2F;li&gt;
+&lt;li&gt;http:&#x2F;&#x2F;dialectrix.com&#x2F;langford&#x2F;langford-algorithm.html&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+</content>
+        
+    </entry>
+    <entry xml:lang="en">
+        <title>A VHDL Code Generator for Wallace Tree</title>
+        <published>2014-06-30T00:00:00+00:00</published>
+        <updated>2014-06-30T00:00:00+00:00</updated>
+        
+        <author>
+          <name>
+            
+              Unknown
+            
+          </name>
+        </author>
+        
+        <link rel="alternate" type="text/html" href="https://gagan405.github.io/posts/vhdl-code-generator-wallace-tree/"/>
+        <id>https://gagan405.github.io/posts/vhdl-code-generator-wallace-tree/</id>
+        
+        <content type="html" xml:base="https://gagan405.github.io/posts/vhdl-code-generator-wallace-tree/">&lt;p&gt;&lt;a href=&quot;https:&#x2F;&#x2F;en.wikipedia.org&#x2F;wiki&#x2F;Wallace_tree&quot;&gt;Wallace Tree multiplier&lt;&#x2F;a&gt; is essentially a hierarchical structure of Carry Save Adders, organized in a manner, where each CSA takes care of getting the product bits of some weightage. While the structure takes just 1 cycle to multiply two integers, writing the VHDL code is a pain. A 32 bit wallace tree multiplier would have around 3k lines of code. Add to that, the pain of organizing signals and connecting them individually.&lt;&#x2F;p&gt;
+&lt;p&gt;Not a recent venture though. I had written this round about 2 years ago, (in a lousy Bavarian village of Moosburg) when I learned about this problem statement from a friend of mine. He coded it using Java. I did it in C++.&lt;&#x2F;p&gt;
+&lt;p&gt;The code is &lt;a href=&quot;https:&#x2F;&#x2F;github.com&#x2F;gagan405&#x2F;WallTree&quot;&gt;here&lt;&#x2F;a&gt; if anyone is interested.&lt;&#x2F;p&gt;
+</content>
+        
+    </entry>
+</feed>

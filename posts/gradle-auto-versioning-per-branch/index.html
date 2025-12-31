@@ -1,0 +1,89 @@
+<!doctype html><html class="dark light" lang=en><head><meta charset=UTF-8><meta content="IE=edge" http-equiv=X-UA-Compatible><meta content="width=device-width,initial-scale=1.0" name=viewport><meta content=https://gagan405.github.io name=base><title>
+            
+                Gradle release versioning
+            
+        </title><meta content="Gradle release versioning" property=og:title><link href=https://gagan405.github.io/icon/favicon.png rel=icon type=image/png><link href=https://gagan405.github.io/fonts.css rel=stylesheet><script defer src=https://gagan405.github.io/js/codeblock.js></script><script defer src=https://gagan405.github.io/js/toc.js></script><script defer src=https://gagan405.github.io/js/note.js></script><script>MathJax = {
+                    tex: {
+                        inlineMath: [
+                            ['$', '$'],
+                            ['\\(', '\\)']
+                        ]
+                    }
+                };</script><script async id=MathJax-script src=https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js></script><link title="
+    gb mishra
+" href=https://gagan405.github.io/atom.xml rel=alternate type=application/atom+xml><link title="
+    gb mishra
+" href=https://gagan405.github.io/rss.xml rel=alternate type=application/rss+xml><link href=https://gagan405.github.io/theme/light.css rel=stylesheet><link href=https://gagan405.github.io/theme/dark.css id=darkModeStyle rel=stylesheet><script src=https://gagan405.github.io/js/themetoggle.js></script><script>setTheme(getSavedTheme());</script><link href=https://gagan405.github.io/main.css media=screen rel=stylesheet><script src="https://gagan405.github.io/search_index.en.js?h=ed7db15dd4fde6e35f9a" defer></script><script src="https://gagan405.github.io/js/searchElasticlunr.min.js?h=3626c0ef99daa745b31e" defer></script><body><div class=left-content></div><div class=content><nav><div class=left-nav><a href=https://gagan405.github.io>gb mishra</a><div class=socials><a class=social href=https://x.com/__gbm rel=me> <img alt=twitter src=https://gagan405.github.io/icons/social/twitter.svg> </a><a class=social href=https://github.com/gagan405/ rel=me> <img alt=github src=https://gagan405.github.io/icons/social/github.svg> </a><a class=social href=/atom.xml rel=me> <img alt=rss src=https://gagan405.github.io/icons/social/rss.svg> </a></div></div><div class=right-nav><a href=https://gagan405.github.io/posts style=margin-right:.5em>/posts</a><a href=https://gagan405.github.io/tags style=margin-right:.5em>/tags</a><button title="$SHORTCUT to open search" class=search-button id=search-button><img alt=Search class=search-icon src=https://gagan405.github.io/icons/search.svg></button><div class="search-modal js" aria-labelledby=modalTitle id=searchModal role=dialog><div id=modal-content><h1 class=page-header id=modalTitle>Search</h1><div id=searchBar><input aria-controls=results-container aria-expanded=false autocomplete=off id=searchInput placeholder=Search... role=combobox spellcheck=false><button title="Clear search" class=clear-button id=clear-search><svg viewbox="0 -960 960 960" xmlns=http://www.w3.org/2000/svg><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button></div><div id=results-container><div id=results-info><span id=zero_results style=display:none>No results</span><span id=one_result style=display:none>1 result</span><span id=many_results style=display:none>$NUMBER results</span></div><div id=results role=listbox></div></div></div></div><a onclick="toggleTheme(); event.preventDefault();" href=# id=dark-mode-toggle> <img alt=Light id=sun-icon src=https://gagan405.github.io/icons/sun.svg> <img alt=Dark id=moon-icon src=https://gagan405.github.io/icons/moon.svg style=filter:invert()> <img alt=Auto id=auto-icon src=https://gagan405.github.io/icons/auto.svg style=filter:invert()> </a><script>updateItemToggleTheme()</script></div></nav><div data-selector="main article p" class=visible-element-observer-root><main><article><div class=title><div class=page-header>Gradle release versioning</div><div class=meta>Posted on <time>2018-07-03</time><span class=tags-label>::</span><span class=tags> <a class=post-tag href=https://gagan405.github.io/tags/gradle/>gradle</a> <a class=post-tag href=https://gagan405.github.io/tags/release/>release</a> </span></div></div><section class=body><p>There is this awesome <a href=https://github.com/researchgate/gradle-release>release plugin</a> which takes care of the usual stuff and more, like checking uncommitted files, checking if commit is pushed or not, and adding release tag etc.<p>You can also customize the release from a specific branch.<p>But then, it still doesn't support versioning per branch. In cases, where you want to have some snapshot (or any other classifier) release from feature branches, and want to keep that separate from main RELEASE versions.<p>So, here is a quick and dirty knock around I did to make it work :<p><code>gradle.properties</code> :<pre style=color:#c0c5ce;background-color:#2b303b><code><span>masterVersion=1.0
+</span><span>snapshotVersion=1.10
+</span><span>version=1.10.SNAPSHOT
+</span></code></pre><p>Here, <code>masterVersion</code> is used to track the release versions from master branch and <code>snapshotVersion</code> for any other branch.<p>We need to know which branch we are in :<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span>allProjects {
+</span><span>  ext.branch = gitBranch()
+</span><span>  project.version = getCustomVersion(</span><span style=color:#d08770>false</span><span>)
+</span><span>}
+</span><span>
+</span><span style=color:#b48ead>def </span><span style=color:#8fa1b3>gitBranch</span><span>() {
+</span><span>    </span><span style=color:#b48ead>def</span><span> branch = ""
+</span><span>    </span><span style=color:#b48ead>def</span><span> proc = "</span><span style=color:#a3be8c>git rev-parse --abbrev-ref HEAD</span><span>".execute()
+</span><span>    proc.in.eachLine { line -> branch = line }
+</span><span>    proc.err.eachLine { line -> </span><span style=color:#96b5b4>println</span><span> line }
+</span><span>    proc.waitFor()
+</span><span>    branch
+</span><span>}
+</span></code></pre><p>We need to set this <code>project.version</code> as thats being read by the release plugin. I couldnt make it work with any random project property. So I had to explicitily write it out.<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span style=color:#b48ead>def </span><span style=color:#8fa1b3>getCustomVersion</span><span>(</span><span style=color:#b48ead>boolean </span><span style=color:#bf616a>base</span><span>) {
+</span><span>    </span><span style=color:#b48ead>if</span><span>(ext.branch == "</span><span style=color:#a3be8c>master</span><span>") {
+</span><span>        </span><span style=color:#b48ead>return</span><span> base ?  masterVersion
+</span><span>                    : masterVersion + '</span><span style=color:#a3be8c>.</span><span>' + '</span><span style=color:#a3be8c>RELEASE</span><span>'
+</span><span>    } </span><span style=color:#b48ead>else </span><span>{
+</span><span>        </span><span style=color:#b48ead>return</span><span> base ?  snapshotVersion
+</span><span>                    : snapshotVersion + '</span><span style=color:#a3be8c>.</span><span>' + '</span><span style=color:#a3be8c>RELEASE</span><span>'
+</span><span>    }
+</span><span>}
+</span></code></pre><p>The above will be called by<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span>task updateCustomVersions {
+</span><span>    doLast {
+</span><span>        </span><span style=color:#b48ead>def</span><span> ver = getCustomVersion(</span><span style=color:#d08770>true</span><span>)
+</span><span>        </span><span style=color:#b48ead>def</span><span> newVer = updateCustomVersionsHelper(ver)
+</span><span>        </span><span style=color:#b48ead>if</span><span>(gitBranch() == "</span><span style=color:#a3be8c>master</span><span>") {
+</span><span>            </span><span style=color:#96b5b4>println</span><span>("</span><span style=color:#a3be8c>WRITING RELEASE VERSION TO </span><span>" + newVer)
+</span><span>            writeVersion("</span><span style=color:#a3be8c>masterVersion</span><span>", newVer)
+</span><span>        } </span><span style=color:#b48ead>else </span><span>{
+</span><span>            </span><span style=color:#96b5b4>println</span><span>("</span><span style=color:#a3be8c>WRITING SNAPSHOT VERSION TO </span><span>" + newVer)
+</span><span>            writeVersion("</span><span style=color:#a3be8c>snapshotVersion</span><span>", newVer)
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span></code></pre><p>And here are the additional methods needed ...<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span style=color:#65737e>// increment version by 1
+</span><span style=color:#b48ead>String </span><span style=color:#8fa1b3>updateCustomVersionsHelper</span><span>(</span><span style=color:#b48ead>String </span><span style=color:#bf616a>ver</span><span>) {
+</span><span>    </span><span style=color:#b48ead>Map</span><span>&lt;</span><span style=color:#b48ead>String</span><span>, </span><span style=color:#b48ead>Closure</span><span>> patterns = [
+</span><span>            /</span><span style=color:#96b5b4>(\d+)([^\d]*$)</span><span>/: { </span><span style=color:#b48ead>Matcher</span><span> m, </span><span style=color:#b48ead>Project</span><span> p -> m.replaceAll("</span><span style=color:#ab7967>${</span><span style=color:#a3be8c>(m[</span><span style=color:#d08770>0</span><span style=color:#a3be8c>][</span><span style=color:#d08770>1</span><span style=color:#a3be8c>] </span><span>as </span><span style=color:#b48ead>int</span><span style=color:#a3be8c>) </span><span>+ </span><span style=color:#d08770>1</span><span style=color:#ab7967>}${</span><span style=color:#a3be8c>m[</span><span style=color:#d08770>0</span><span style=color:#a3be8c>][</span><span style=color:#d08770>2</span><span style=color:#a3be8c>]</span><span style=color:#ab7967>}</span><span>") }
+</span><span>    ]
+</span><span>
+</span><span>    </span><span style=color:#b48ead>for</span><span> (entry in patterns) {
+</span><span>        </span><span style=color:#b48ead>String</span><span> pattern = entry.key
+</span><span>        </span><span style=color:#b48ead>Closure</span><span> handler = entry.value
+</span><span>        </span><span style=color:#b48ead>Matcher</span><span> matcher = ver =~ pattern
+</span><span>
+</span><span>        </span><span style=color:#b48ead>if</span><span> (matcher.find()) {
+</span><span>            </span><span style=color:#b48ead>return </span><span>handler(matcher, project)
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style=color:#65737e>// writes version to gradle.properties file
+</span><span style=color:#b48ead>protected void </span><span style=color:#8fa1b3>writeVersion</span><span>(</span><span style=color:#b48ead>String </span><span style=color:#bf616a>key</span><span>, </span><span style=color:#bf616a>version</span><span>) {
+</span><span>    </span><span style=color:#b48ead>try </span><span>{
+</span><span>        </span><span style=color:#b48ead>def</span><span> file = project.file("</span><span style=color:#a3be8c>gradle.properties</span><span>")
+</span><span>        </span><span style=color:#b48ead>if</span><span> (!file.file) {
+</span><span>            project.ant.echo(</span><span style=color:#d08770>file</span><span>: file, </span><span style=color:#d08770>message</span><span>: "</span><span style=color:#bf616a>$key</span><span style=color:#a3be8c>=</span><span style=color:#bf616a>$version</span><span>")
+</span><span>        } </span><span style=color:#b48ead>else </span><span>{
+</span><span>            </span><span style=color:#b48ead>def</span><span> fileText = file.text
+</span><span>            fileText = fileText.replaceAll(key + "</span><span style=color:#a3be8c>.*</span><span>", </span><span style=color:#b48ead>String</span><span>.format("</span><span style=color:#a3be8c>%s=%s</span><span>", key, version))
+</span><span>            file.write(fileText)
+</span><span>        }
+</span><span>    } </span><span style=color:#b48ead>catch</span><span> (</span><span style=color:#b48ead>Exception</span><span> be) {
+</span><span>        be.printStackTrace()
+</span><span>        </span><span style=color:#b48ead>throw new GradleException</span><span>('</span><span style=color:#a3be8c>Unable to write version property.</span><span>', be)
+</span><span>    }
+</span><span>}
+</span></code></pre><p>Finally, call the <code>updateVersion</code> task when release is executed :<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span>commitNewVersion.dependsOn updateCustomVersions
+</span></code></pre><p>Use automatic versioning and see it running :<pre style=color:#c0c5ce;background-color:#2b303b><code><span>./gradlew release -Prelease.useAutomaticVersion=true
+</span></code></pre></section></article></main></div></div><div class=right-content></div>

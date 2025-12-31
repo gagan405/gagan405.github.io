@@ -1,0 +1,71 @@
+<!doctype html><html class="dark light" lang=en><head><meta charset=UTF-8><meta content="IE=edge" http-equiv=X-UA-Compatible><meta content="width=device-width,initial-scale=1.0" name=viewport><meta content=https://gagan405.github.io name=base><title>
+            
+                Multi-module Gradle to Debian
+            
+        </title><meta content="Multi-module Gradle to Debian" property=og:title><link href=https://gagan405.github.io/icon/favicon.png rel=icon type=image/png><link href=https://gagan405.github.io/fonts.css rel=stylesheet><script defer src=https://gagan405.github.io/js/codeblock.js></script><script defer src=https://gagan405.github.io/js/toc.js></script><script defer src=https://gagan405.github.io/js/note.js></script><script>MathJax = {
+                    tex: {
+                        inlineMath: [
+                            ['$', '$'],
+                            ['\\(', '\\)']
+                        ]
+                    }
+                };</script><script async id=MathJax-script src=https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js></script><link title="
+    gb mishra
+" href=https://gagan405.github.io/atom.xml rel=alternate type=application/atom+xml><link title="
+    gb mishra
+" href=https://gagan405.github.io/rss.xml rel=alternate type=application/rss+xml><link href=https://gagan405.github.io/theme/light.css rel=stylesheet><link href=https://gagan405.github.io/theme/dark.css id=darkModeStyle rel=stylesheet><script src=https://gagan405.github.io/js/themetoggle.js></script><script>setTheme(getSavedTheme());</script><link href=https://gagan405.github.io/main.css media=screen rel=stylesheet><script src="https://gagan405.github.io/search_index.en.js?h=ed7db15dd4fde6e35f9a" defer></script><script src="https://gagan405.github.io/js/searchElasticlunr.min.js?h=3626c0ef99daa745b31e" defer></script><body><div class=left-content></div><div class=content><nav><div class=left-nav><a href=https://gagan405.github.io>gb mishra</a><div class=socials><a class=social href=https://x.com/__gbm rel=me> <img alt=twitter src=https://gagan405.github.io/icons/social/twitter.svg> </a><a class=social href=https://github.com/gagan405/ rel=me> <img alt=github src=https://gagan405.github.io/icons/social/github.svg> </a><a class=social href=/atom.xml rel=me> <img alt=rss src=https://gagan405.github.io/icons/social/rss.svg> </a></div></div><div class=right-nav><a href=https://gagan405.github.io/posts style=margin-right:.5em>/posts</a><a href=https://gagan405.github.io/tags style=margin-right:.5em>/tags</a><button title="$SHORTCUT to open search" class=search-button id=search-button><img alt=Search class=search-icon src=https://gagan405.github.io/icons/search.svg></button><div class="search-modal js" aria-labelledby=modalTitle id=searchModal role=dialog><div id=modal-content><h1 class=page-header id=modalTitle>Search</h1><div id=searchBar><input aria-controls=results-container aria-expanded=false autocomplete=off id=searchInput placeholder=Search... role=combobox spellcheck=false><button title="Clear search" class=clear-button id=clear-search><svg viewbox="0 -960 960 960" xmlns=http://www.w3.org/2000/svg><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button></div><div id=results-container><div id=results-info><span id=zero_results style=display:none>No results</span><span id=one_result style=display:none>1 result</span><span id=many_results style=display:none>$NUMBER results</span></div><div id=results role=listbox></div></div></div></div><a onclick="toggleTheme(); event.preventDefault();" href=# id=dark-mode-toggle> <img alt=Light id=sun-icon src=https://gagan405.github.io/icons/sun.svg> <img alt=Dark id=moon-icon src=https://gagan405.github.io/icons/moon.svg style=filter:invert()> <img alt=Auto id=auto-icon src=https://gagan405.github.io/icons/auto.svg style=filter:invert()> </a><script>updateItemToggleTheme()</script></div></nav><div data-selector="main article p" class=visible-element-observer-root><main><article><div class=title><div class=page-header>Multi-module Gradle to Debian</div><div class=meta>Posted on <time>2017-04-10</time><span class=tags-label>::</span><span class=tags> <a class=post-tag href=https://gagan405.github.io/tags/java/>java</a> <a class=post-tag href=https://gagan405.github.io/tags/microservices/>microservices</a> <a class=post-tag href=https://gagan405.github.io/tags/dropwizard/>dropwizard</a> <a class=post-tag href=https://gagan405.github.io/tags/gradle/>gradle</a> </span></div></div><section class=body><p>There is already a <a href=https://github.com/gesellix/gradle-debian-plugin>gradle plugin</a> which creates a debian out of a gradle project.<p>However, as far as I remember, that did had certain problems with the newer version of Gradle (2.2+) and in multi-module projects. (Unfortunately, it is too late to remember what exactly was the problem).<p>Anyhow, I wrote some custom gradle tasks, that just creates a debian package. Of course, the debian control files, and file heirarchies are project specific and needs to be changed as per requirements.<p>As mentioned, I added a couple of tasks, starting with the one <code>allJar</code> which creates a fat jar with all the complied class files :<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span>task allJar(</span><span style=color:#d08770>type</span><span>: </span><span style=color:#b48ead>Jar</span><span>, </span><span style=color:#d08770>dependsOn</span><span>: [subprojects.tasks['</span><span style=color:#a3be8c>classes</span><span>'], subprojects.sourcesJar, subprojects.jar, subprojects.copyToLib ] ) {
+</span><span>    baseName = project.name + '</span><span style=color:#a3be8c>-all</span><span>'
+</span><span>    subprojects.each { subproject ->
+</span><span>        from subproject.configurations.archives.allArtifacts.files.collect {
+</span><span>            zipTree(it)
+</span><span>        }
+</span><span>    }
+</span><span>    manifest {
+</span><span>        attributes '</span><span style=color:#a3be8c>Main-Class</span><span>': mainClassName
+</span><span>    }
+</span><span>}
+</span></code></pre><p>The task <code>copyToLib</code> is used here to include any external jar files located in <code>lib</code> directories.<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span>subprojects {
+</span><span>    task copyToLib( </span><span style=color:#d08770>type</span><span>: </span><span style=color:#b48ead>Copy</span><span>) {
+</span><span>        into "</span><span style=color:#bf616a>$buildDir</span><span style=color:#a3be8c>/libs/lib</span><span>"
+</span><span>        from configurations.runtime
+</span><span>    }
+</span><span>}
+</span></code></pre><p>After this, we can just add all the required tasks in one single file, for e.g., <code>debian.gradle</code>.<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span>
+</span><span>task copyJarDeps(</span><span style=color:#d08770>type</span><span>: </span><span style=color:#b48ead>Copy</span><span>) {
+</span><span>    from(subprojects.configurations.runtime)
+</span><span>    into project.file('</span><span style=color:#a3be8c>debian/package/usr/share/test-project</span><span>')
+</span><span>}
+</span><span>
+</span><span>task copyControlFiles(</span><span style=color:#d08770>type</span><span>: </span><span style=color:#b48ead>Copy</span><span>) {
+</span><span>    from '</span><span style=color:#a3be8c>./DEBIAN_CONTROL</span><span>'
+</span><span>    into project.file('</span><span style=color:#a3be8c>debian/package/DEBIAN</span><span>')
+</span><span>}
+</span><span>
+</span><span>task copyAppConfigFiles(</span><span style=color:#d08770>type</span><span>: </span><span style=color:#b48ead>Copy</span><span>) {
+</span><span>    from '</span><span style=color:#a3be8c>rootProject/config</span><span>'
+</span><span>    into project.file('</span><span style=color:#a3be8c>debian/package/etc/configName</span><span>')
+</span><span>}
+</span><span>
+</span><span>task copySwaggerFiles(</span><span style=color:#d08770>type</span><span>: </span><span style=color:#b48ead>Copy</span><span>) {
+</span><span>    from '</span><span style=color:#a3be8c>swagger</span><span>'
+</span><span>    into project.file('</span><span style=color:#a3be8c>debian/package/usr/share/assets/swagger</span><span>')
+</span><span>}
+</span><span>
+</span><span>task copyDebRunScripts(</span><span style=color:#d08770>type</span><span>: </span><span style=color:#b48ead>Copy</span><span>){
+</span><span>    from '</span><span style=color:#a3be8c>./startup_script</span><span>'
+</span><span>    into project.file('</span><span style=color:#a3be8c>debian/package/etc/init.d</span><span>')
+</span><span>}
+</span><span>
+</span><span>task copyMainClassJar(</span><span style=color:#d08770>type</span><span>: </span><span style=color:#b48ead>Copy</span><span>, </span><span style=color:#d08770>dependsOn</span><span>: allJar){
+</span><span>    from '</span><span style=color:#a3be8c>build/libs/root-project-all-0.1.0.jar</span><span>'
+</span><span>    into project.file('</span><span style=color:#a3be8c>debian/package/usr/share/projectName</span><span>')
+</span><span>}
+</span><span>
+</span><span>task copyDebFiles(</span><span style=color:#d08770>dependsOn</span><span>: [copyJarDeps, copyAppConfigFiles, copyDebRunScripts, copyControlFiles, copySwaggerFiles])
+</span><span>
+</span><span>
+</span><span>task buildDeb(</span><span style=color:#d08770>dependsOn</span><span>: [allJar, copyDebFiles, copyMainClassJar]) {
+</span><span>}
+</span></code></pre><p>Of course, the string constants are to be replaced as per requirements of the project. And so is the debian control files in the directory <code>DEBIAN_CONTROL</code>.<p>Now, we just include this file in the main <code>build.gradle</code> file :<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span>apply </span><span style=color:#d08770>from</span><span>: file("</span><span style=color:#a3be8c>gradle/debian.gradle</span><span>")
+</span></code></pre><p>Now, we can build a debian package by using the command :<pre class=language-groovy data-lang=groovy style=color:#c0c5ce;background-color:#2b303b><code class=language-groovy data-lang=groovy><span>./gradlew clean buildDeb
+</span></code></pre></section></article></main></div></div><div class=right-content></div>
