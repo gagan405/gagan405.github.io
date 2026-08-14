@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gagan Bihari Mishra — Résumé</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --ink: #0f0f0f;
+      --paper: #f7f4ef;
+      --rule: #d4cfc8;
+      --accent: #c0392b;
+      --accent-muted: #e8d5d3;
+      --secondary: #4a6274;
+      --mono-bg: #eee9e2;
+      --gap: 2.5rem;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html {
+      background: var(--paper);
+      color: var(--ink);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 15px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 3rem 2rem 5rem;
+      animation: fadeIn 0.5s ease both;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ─── HEADER ─── */
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: end;
+      gap: 1rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 2px solid var(--ink);
+      margin-bottom: var(--gap);
+    }
+
+    .name {
+      font-family: 'Playfair Display', serif;
+      font-size: clamp(2.4rem, 5vw, 3.4rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+    }
+
+    .name span {
+      color: var(--accent);
+    }
+
+    .contact {
+      text-align: right;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.72rem;
+      font-weight: 300;
+      color: var(--secondary);
+      line-height: 1.9;
+    }
+
+    .contact a {
+      color: inherit;
+      text-decoration: none;
+      border-bottom: 1px solid var(--rule);
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .contact a:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* ─── SUMMARY ─── */
+    .summary {
+      background: var(--mono-bg);
+      border-left: 3px solid var(--accent);
+      padding: 1.1rem 1.4rem;
+      margin-bottom: var(--gap);
+      font-size: 0.9rem;
+      color: #2c2c2c;
+    }
+
+    .summary p { margin-bottom: 0.5rem; }
+    .summary p:last-child { margin-bottom: 0; }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-top: 0.75rem;
+    }
+
+    .tag {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: var(--accent-muted);
+      color: var(--accent);
+      padding: 0.2rem 0.55rem;
+      border-radius: 2px;
+    }
+
+    /* ─── SECTIONS ─── */
+    section {
+      margin-bottom: var(--gap);
+    }
+
+    .section-title {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65rem;
+      font-weight: 500;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 1.2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+    }
+
+    .section-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--rule);
+    }
+
+    /* ─── JOB ─── */
+    .job {
+      display: grid;
+      grid-template-columns: 90px 1fr;
+      gap: 0 1.5rem;
+      margin-bottom: 2rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .job:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .job-date {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.68rem;
+      color: var(--secondary);
+      line-height: 1.5;
+      padding-top: 0.15rem;
+    }
+
+    .job-date .year {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--ink);
+    }
+
+    .job-right {}
+
+    .job-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.05rem;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+
+    .job-company {
+      font-size: 0.82rem;
+      color: var(--secondary);
+      margin-bottom: 0.7rem;
+    }
+
+    .job-role-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.62rem;
+      color: var(--secondary);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      display: block;
+      margin-bottom: 0.5rem;
+    }
+
+    .job ul {
+      list-style: none;
+      margin-bottom: 0.75rem;
+    }
+
+    .job ul li {
+      font-size: 0.855rem;
+      line-height: 1.6;
+      padding-left: 1.1rem;
+      position: relative;
+      margin-bottom: 0.3rem;
+      color: #222;
+    }
+
+    .job ul li::before {
+      content: '○';
+      position: absolute;
+      left: 0;
+      color: var(--accent);
+      font-size: 0.6rem;
+      top: 0.3rem;
+    }
+
+    .tech-line {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65rem;
+      color: var(--secondary);
+      background: var(--mono-bg);
+      padding: 0.25rem 0.6rem;
+      display: inline-block;
+      border-radius: 2px;
+    }
+
+    .tech-line strong {
+      color: var(--ink);
+      font-weight: 500;
+    }
+
+    /* ─── EDUCATION ─── */
+    .edu-item {
+      display: grid;
+      grid-template-columns: 90px 1fr;
+      gap: 0 1.5rem;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .edu-item:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .edu-date {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.68rem;
+      color: var(--secondary);
+      padding-top: 0.15rem;
+    }
+
+    .edu-degree {
+      font-family: 'Playfair Display', serif;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .edu-school {
+      font-size: 0.82rem;
+      color: var(--secondary);
+      margin-bottom: 0.3rem;
+    }
+
+    .edu-detail {
+      font-size: 0.78rem;
+      color: #555;
+      font-style: italic;
+    }
+
+    /* ─── PROJECTS ─── */
+    .project-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+
+    .project-card {
+      background: var(--mono-bg);
+      padding: 1rem 1.1rem;
+      border-radius: 2px;
+      border-top: 2px solid var(--rule);
+      transition: border-color 0.15s;
+    }
+
+    .project-card:hover {
+      border-color: var(--accent);
+    }
+
+    .project-season {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      color: var(--secondary);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 0.3rem;
+    }
+
+    .project-name {
+      font-weight: 500;
+      font-size: 0.85rem;
+      margin-bottom: 0.4rem;
+    }
+
+    .project-desc {
+      font-size: 0.78rem;
+      color: #444;
+      line-height: 1.5;
+    }
+
+    /* ─── PERSONAL ─── */
+    .personal-grid {
+      display: flex;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .personal-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .personal-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--secondary);
+    }
+
+    .personal-value {
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    /* ─── PRINT ─── */
+    @media print {
+      body { padding: 1rem; font-size: 13px; }
+      .job, .edu-item { page-break-inside: avoid; }
+      header { padding-bottom: 1rem; }
+    }
+
+    @media (max-width: 600px) {
+      .job, .edu-item {
+        grid-template-columns: 1fr;
+        gap: 0.3rem;
+      }
+      .job-date, .edu-date {
+        font-size: 0.72rem;
+      }
+      header {
+        grid-template-columns: 1fr;
+      }
+      .contact {
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div>
+      <div class="name">Gagan Bihari<br /><span>Mishra</span></div>
+    </div>
+    <div class="contact">
+      <!--<a href="tel:+xxx">+xxx</a><br />-->
+      <a href="mailto:gagan@minbox.in">gagan@minbox.in</a>
+    </div>
+  </header>
+
+  <!-- SUMMARY -->
+  <div class="summary">
+    <p>Senior Software Engineer specializing in distributed systems and databases. Experienced in designing and operating large-scale, fault-tolerant data platforms, storage engines, and cloud infrastructure. Led architecture for Aurora DSQL billing, Chaos testing, database client SDKs and query components at Aerospike, and large-scale backend systems at Amazon.</p>
+    <div class="tags">
+      <span class="tag">Distributed Systems</span>
+      <span class="tag">Databases</span>
+      <span class="tag">Storage Engines</span>
+      <span class="tag">Consistency Models</span>
+      <span class="tag">Scalability</span>
+      <span class="tag">Cloud Infrastructure</span>
+    </div>
+  </div>
+
+  <!-- EXPERIENCE -->
+  <section>
+    <div class="section-title">Experience</div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Oct '25</span>
+        Present
+      </div>
+      <div class="job-right">
+        <div class="job-title">Sr. Software Engineer</div>
+        <div class="job-company">Aerospike Inc. — Seattle</div>
+        <span class="job-role-label">Core Database Engine &amp; Query Infrastructure</span>
+        <ul>
+          <li>Led design and implementation of DSL parser, index selection, and query optimizer in C++ for Aerospike's query engine.</li>
+          <li>Designed chaos-testing framework validating strong-consistency guarantees under failure scenarios.</li>
+          <li>Owned and shipped production client SDKs (Java, Rust, Go) and JDBC/Spring integrations used by external customers.</li>
+          <li>Built org-wide CI/CD and automated release pipelines for all client libraries.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> C++, Rust, Go, Java, Distributed Systems, Query Processing, Storage Engines</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">May '23</span>
+        Oct '25
+      </div>
+      <div class="job-right">
+        <div class="job-title">Sr. Software Engineer</div>
+        <div class="job-company">AWS Software Development — Seattle</div>
+        <span class="job-role-label">Aurora DSQL — Region Expansion &amp; Metering</span>
+        <ul>
+          <li>Designed and built multi-region billing and metering systems for Aurora DSQL, a distributed SQL database.</li>
+          <li>Developed Application Recovery Controller's control-plane components supporting failure recovery in multi-region/multi-AZ infrastructure.</li>
+          <li>Led automation of region expansion for Aurora DSQL with CloudFormation.</li>
+          <li>Led team processes, streamlining operations and mentoring junior SDEs.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> Rust, Java, Kotlin, TypeScript, AWS, Aurora DSQL</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Jun '19</span>
+        Apr '23
+      </div>
+      <div class="job-right">
+        <div class="job-title">Sr. Software Engineer</div>
+        <div class="job-company">Amazon.com — Bellevue</div>
+        <span class="job-role-label">Distributed Systems — Vendor Selection Platform</span>
+        <ul>
+          <li>Led architecture and delivery of high-scale backend services powering supply-chain vendor selection workflows, reducing operational costs by 50%.</li>
+          <li>Designed and implemented a value-deduplicated LRU cache library to reduce memory footprint and improve latency.</li>
+          <li>Built a file-backed S3 indexing system using timestamp-partitioned indexes, forming the foundation for API tracing/analytics.</li>
+          <li>Drove performance modernization including serialization/storage optimizations, API redesigns, and JVM/Kotlin migrations.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> Java, Kotlin, SQL, Python, TypeScript, AWS</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Feb '17</span>
+        May '19
+      </div>
+      <div class="job-right">
+        <div class="job-title">Software Development Engineer</div>
+        <div class="job-company">Amazon.com — Berlin</div>
+        <span class="job-role-label">Review Solicitation Platform</span>
+        <ul>
+          <li>Designed and implemented core services for Amazon's review solicitation system from inception.</li>
+          <li>Migrated customer selection pipelines from Oracle warehouse to internal data platform.</li>
+          <li>Built filtering and targeting services for large-scale customer segmentation.</li>
+          <li>Enabled review delivery via mobile push and email channels.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> Java, SQL, Python, Spark, AWS</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Mar '17</span>
+        May '19
+      </div>
+      <div class="job-right">
+        <div class="job-title">Consulting Architect</div>
+        <div class="job-company">GaragePlug.com</div>
+        <ul>
+          <li>Designed and implemented complete backend system — OMS, authentication, warehouse management, CRM, accounting, reporting.</li>
+          <li>Set up services and infrastructure using AWS, ELB, RDS, SNS, SQS, nginx.</li>
+          <li>Led a team of engineers on detailed implementation, working closely with founders.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> Java, SQL, AWS, ElasticSearch, Spring</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Mar '16</span>
+        Dec '16
+      </div>
+      <div class="job-right">
+        <div class="job-title">Consulting Architect</div>
+        <div class="job-company">Motorzo.in — Bangalore</div>
+        <ul>
+          <li>Designed microservices, APIs, entities and systems for MotorZo from scratch.</li>
+          <li>Developed modules including accounting, order management and authentication.</li>
+          <li>Guided a team of engineers on low-level design and implementation.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> Java, MySQL, ElasticSearch, Dropwizard</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Sep '14</span>
+        Sep '16
+      </div>
+      <div class="job-right">
+        <div class="job-title">Software Development Engineer</div>
+        <div class="job-company">Flipkart.com — Bangalore</div>
+        <span class="job-role-label">Seller Platform</span>
+        <ul>
+          <li>Developed invoicing application for Flipkart's online marketplace.</li>
+          <li>Developed external seller APIs for large seller integration.</li>
+          <li>Contributed to sharded MySQL storage design for scalability.</li>
+          <li>Contributed to dev-ops tasks including sandbox integration, alerting, archiving and purging.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> Java, Python, Ruby, MySQL, Dropwizard</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Jan '14</span>
+        Aug '14
+      </div>
+      <div class="job-right">
+        <div class="job-title">Senior Software Engineer</div>
+        <div class="job-company">The Kratos — Bangalore</div>
+        <span class="job-role-label">Mobile Ad Server</span>
+        <ul>
+          <li>Developed data stream aggregation application using Apache Spark Streaming.</li>
+          <li>Developed Vert.x modules for request processing and ad selection.</li>
+          <li>Developed SQL-based aggregation and reporting engine.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> Java, vert.x, Kafka, Spark, Scala, SQL</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Apr '12</span>
+        Oct '12
+      </div>
+      <div class="job-right">
+        <div class="job-title">Graduate Intern — ASIP Development</div>
+        <div class="job-company">Intel Mobile Communications — Munich</div>
+        <ul>
+          <li>Extended software simulation framework and integrated new memory interface for multicore ASIP.</li>
+          <li>Added new instructions to the MASIP; wrote test assembly programs and performed regression testing.</li>
+          <li>Enhanced a firmware distribution tool across ASIP cores.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> C++, SystemC, VHDL, LISA</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Jul '08</span>
+        Aug '10
+      </div>
+      <div class="job-right">
+        <div class="job-title">Software Engineer</div>
+        <div class="job-company">SAP Labs — Bangalore</div>
+        <span class="job-role-label">SAP Data Orchestration Engine</span>
+        <ul>
+          <li>Authored software requirements, design specifications and test cases.</li>
+          <li>Implemented data-specific code-generation, data storage/distribution, and UI for device monitoring.</li>
+          <li>Collaborated with customers during product ramp-up.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> Java, SQL, ABAP, InstallShield</span>
+      </div>
+    </div>
+
+    <div class="job">
+      <div class="job-date">
+        <span class="year">Nov '07</span>
+        Jun '08
+      </div>
+      <div class="job-right">
+        <div class="job-title">Software Engineer</div>
+        <div class="job-company">H3C Technologies — Bangalore</div>
+        <ul>
+          <li>Developed modules for defense mechanisms against various DoS attacks in H3C's router embedded OS.</li>
+          <li>Simulated and tested implementation under complex topologies and configurations.</li>
+        </ul>
+        <span class="tech-line"><strong>Stack:</strong> C, Python, Tcl/Tk</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- EDUCATION -->
+  <section>
+    <div class="section-title">Education</div>
+
+    <div class="edu-item">
+      <div class="edu-date">Oct '10 – Jul '13</div>
+      <div>
+        <div class="edu-degree">M.Sc. Information Technology</div>
+        <div class="edu-school">University of Stuttgart, Germany</div>
+        <div class="edu-detail">GPA: 1.5/4.0 (≈ 88%) · Thesis: Providing In-Network Content-based Routing Using OpenFlow</div>
+      </div>
+    </div>
+
+    <div class="edu-item">
+      <div class="edu-date">Aug '03 – May '07</div>
+      <div>
+        <div class="edu-degree">B.Tech. Electronics &amp; Communication Engineering</div>
+        <div class="edu-school">NIT Hamirpur, India</div>
+        <div class="edu-detail">GPA: 7.72/10 (≈ 77%)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ACADEMIC PROJECTS -->
+  <section>
+    <div class="section-title">Academic Projects</div>
+    <div class="project-grid">
+      <div class="project-card">
+        <div class="project-season">Summer 2012</div>
+        <div class="project-name">Hardware Code-Generation</div>
+        <div class="project-desc">C++ tool to generate VHDL code for Wallace Tree multiplier for any given operand length.</div>
+      </div>
+      <div class="project-card">
+        <div class="project-season">Winter 2011</div>
+        <div class="project-name">RISC Processor Design</div>
+        <div class="project-desc">Designed a basic RISC Processor in VHDL with classic five-stage pipeline, bypass/forwarding, cache and memory arbiter.</div>
+      </div>
+      <div class="project-card">
+        <div class="project-season">Summer 2011</div>
+        <div class="project-name">GPU Computing</div>
+        <div class="project-desc">Parallelized a sequential convex envelope algorithm over 2D using CUDA; analyzed performance speedup.</div>
+      </div>
+      <div class="project-card">
+        <div class="project-season">Spring 2007</div>
+        <div class="project-name">Hardware Cache</div>
+        <div class="project-desc">Co-authored and benchmarked a CPU cache implementation with LRU and FIFO replacement policies.</div>
+      </div>
+      <div class="project-card">
+        <div class="project-season">Spring 2006</div>
+        <div class="project-name">Embedded Solar Tracker</div>
+        <div class="project-desc">Designed a solar tracker using 8051 microcontroller interfaced with a servo motor.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PERSONAL -->
+  <section>
+    <div class="section-title">Personal</div>
+    <div class="personal-grid">
+      <div class="personal-item">
+        <span class="personal-label">Nationality</span>
+        <span class="personal-value">Indian</span>
+      </div>
+      <div class="personal-item">
+        <span class="personal-label">Languages</span>
+        <span class="personal-value">English, Hindi, Odia, Deutsch (A1)</span>
+      </div>
+    </div>
+  </section>
+
+</body>
+</html>
